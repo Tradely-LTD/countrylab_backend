@@ -460,7 +460,7 @@ dashboardRouter.get(
             eq(results.tenant_id, tenantId),
             sql`${results.overall_status} IN ('submitted', 'under_review')`,
           ),
-        )[0] || { count: 0 },
+        ),
       db
         .select({ count: sql<number>`count(*)::int` })
         .from(reagents)
@@ -515,9 +515,7 @@ dashboardRouter.get(
         ),
     ]);
 
-    const pendingResult = Array.isArray(pendingApprovals)
-      ? pendingApprovals[0]
-      : pendingApprovals;
+    const pendingResult = pendingApprovals[0] || { count: 0 };
 
     res.json({
       data: {
@@ -525,7 +523,7 @@ dashboardRouter.get(
           byStatus: sampleStats,
           todayCount: todaySamples[0]?.count || 0,
         },
-        pendingApprovals: (pendingResult as any)?.count || 0,
+        pendingApprovals: pendingResult.count || 0,
         inventory: {
           lowStock: lowStockReagents[0]?.count || 0,
           expiringSoon: expiringReagents[0]?.count || 0,
@@ -887,7 +885,7 @@ invoicesRouter.put(
         (sum, item) => sum + item.amount,
         0,
       );
-      const taxRate = body.tax_rate ?? existing.tax_rate;
+      const taxRate = body.tax_rate ?? existing.tax_rate ?? 0;
       const taxAmount = subtotal * (taxRate / 100);
       const total = subtotal + taxAmount;
 

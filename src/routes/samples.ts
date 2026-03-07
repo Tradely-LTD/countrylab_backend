@@ -275,9 +275,21 @@ router.patch(
 
     const body = createSampleSchema.partial().parse(req.body);
 
+    // Convert date strings to Date objects
+    const updateData: any = { ...body, updated_at: new Date() };
+    if (body.collection_date) {
+      updateData.collection_date = new Date(body.collection_date);
+    }
+    if (body.production_date) {
+      updateData.production_date = new Date(body.production_date);
+    }
+    if (body.expiry_date) {
+      updateData.expiry_date = new Date(body.expiry_date);
+    }
+
     const [updated] = await db
       .update(samples)
-      .set({ ...body, updated_at: new Date() })
+      .set(updateData)
       .where(eq(samples.id, req.params.id))
       .returning();
 

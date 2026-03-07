@@ -117,8 +117,8 @@ router.post("/public", async (req: Request, res: Response) => {
 
       if (!firstTenant) {
         throw new AppError(
-          "No tenant configured. Please contact administrator.",
           500,
+          "No tenant configured. Please contact administrator.",
         );
       }
 
@@ -161,7 +161,7 @@ router.post("/public", async (req: Request, res: Response) => {
     }
 
     if (!clientId) {
-      throw new AppError("Client information required", 400);
+      throw new AppError(400, "Client information required");
     }
 
     const requestNumber = await generateRequestNumber(tenantId);
@@ -231,8 +231,8 @@ router.post("/public", async (req: Request, res: Response) => {
         message: firstError.message,
       });
       throw new AppError(
-        `${firstError.path.join(".")}: ${firstError.message}`,
         400,
+        `${firstError.path.join(".")}: ${firstError.message}`,
       );
     }
     throw error;
@@ -335,7 +335,7 @@ router.get("/:id", authenticate, async (req: Request, res: Response) => {
       .limit(1);
 
     if (!request) {
-      throw new AppError("Request not found", 404);
+      throw new AppError(404, "Request not found");
     }
 
     res.json({
@@ -365,12 +365,12 @@ router.put(
       const updateData: any = { ...body, updated_at: new Date() };
 
       if (body.status === "under_review") {
-        updateData.reviewed_by = req.userId;
+        updateData.reviewed_by = req.user!.id;
         updateData.reviewed_at = new Date();
       }
 
       if (body.status === "approved") {
-        updateData.approved_by = req.userId;
+        updateData.approved_by = req.user!.id;
         updateData.approved_at = new Date();
       }
 
@@ -386,11 +386,11 @@ router.put(
         .returning();
 
       if (!updated) {
-        throw new AppError("Request not found", 404);
+        throw new AppError(404, "Request not found");
       }
 
       logger.info(
-        `Sample request updated: ${updated.request_number} by ${req.userId}`,
+        `Sample request updated: ${updated.request_number} by ${req.user!.id}`,
       );
 
       // Send approval email if status changed to approved
@@ -418,7 +418,7 @@ router.put(
       res.json({ success: true, data: updated });
     } catch (error) {
       if (error instanceof z.ZodError) {
-        throw new AppError(error.errors[0].message, 400);
+        throw new AppError(400, error.errors[0].message);
       }
       throw error;
     }
@@ -445,16 +445,16 @@ router.post(
         .limit(1);
 
       if (!request) {
-        throw new AppError("Request not found", 404);
+        throw new AppError(404, "Request not found");
       }
 
       if (request.sample_id) {
-        throw new AppError("Request already converted to sample", 400);
+        throw new AppError(400, "Request already converted to sample");
       }
 
       // Generate ULID for sample
       const { generateULID } = await import("../services/barcodeService");
-      const ulid = await generateULID(req.tenantId!);
+      const ulid = generateULID();
 
       // Create sample from request
       const [sample] = await db
@@ -479,7 +479,7 @@ router.post(
           production_date: request.production_date,
           expiry_date: request.expiry_date,
           manufacturer: request.manufacturer,
-          received_by: req.userId,
+          received_by: req.user!.id,
           status: "received",
         })
         .returning();
