@@ -1,6 +1,6 @@
 import { Router, Request, Response } from "express";
 import { z } from "zod";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { db } from "../db";
 import { tenants } from "../db/schema";
 import { authenticate, requireRole, ADMIN_ROLES } from "../middleware/auth";
@@ -62,7 +62,25 @@ router.get(
       .where(eq(tenants.id, req.tenantId!))
       .limit(1);
 
-    if (!tenant) throw new AppError(404, "Organization not found");
+    // Return empty defaults instead of 404 — tenant may not be configured yet
+    if (!tenant) {
+      return res.json({
+        data: {
+          id: req.tenantId,
+          name: "",
+          slug: "",
+          logo_url: null,
+          address: null,
+          phone: null,
+          email: null,
+          accreditation_number: null,
+          is_active: true,
+          settings: {},
+          created_at: null,
+          updated_at: null,
+        },
+      });
+    }
 
     res.json({ data: tenant });
   },
@@ -85,15 +103,46 @@ router.put(
 
     const body = schema.parse(req.body);
 
-    const [updated] = await db
-      .update(tenants)
-      .set({ ...body, updated_at: new Date() })
+    // Check if tenant exists first
+    const [existing] = await db
+      .select({ id: tenants.id })
+      .from(tenants)
       .where(eq(tenants.id, req.tenantId!))
-      .returning();
+      .limit(1);
 
-    if (!updated) throw new AppError(404, "Organization not found");
+    let result;
+    if (existing) {
+      const [updated] = await db
+        .update(tenants)
+        .set({ ...body, updated_at: new Date() })
+        .where(eq(tenants.id, req.tenantId!))
+        .returning();
+      result = updated;
+    } else {
+      // Auto-create tenant record on first save
+      let slug = body.name
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-|-$/g, "");
 
-    res.json({ data: updated });
+      // Check for slug conflict and append a 4-char hex suffix if taken
+      const [slugConflict] = await db
+        .select({ id: tenants.id })
+        .from(tenants)
+        .where(eq(tenants.slug, slug))
+        .limit(1);
+      if (slugConflict) {
+        slug = `${slug}-${Math.random().toString(16).slice(2, 6)}`;
+      }
+
+      const [created] = await db
+        .insert(tenants)
+        .values({ id: req.tenantId!, slug, ...body })
+        .returning();
+      result = created;
+    }
+
+    res.json({ data: result });
   },
 );
 
@@ -167,6 +216,55 @@ router.delete(
       .returning();
 
     res.json({ message: "Logo deleted successfully" });
+  },
+);
+
+// ─── GET Bank Accounts ────────────────────────────────────────────────────────
+
+router.get(
+  "/bank-accounts",
+  authenticate,
+  async (req: Request, res: Response) => {
+    const [tenant] = await db
+      .select({ settings: tenants.settings })
+      .from(tenants)
+      .where(eq(tenants.id, req.tenantId!))
+      .limit(1);
+
+    const accounts = (tenant?.settings as any)?.bank_accounts ?? [];
+    res.json({ data: accounts });
+  },
+);
+
+// ─── PUT Bank Accounts ────────────────────────────────────────────────────────
+
+router.put(
+  "/bank-accounts",
+  authenticate,
+  requireRole("super_admin", "md", "finance"),
+  async (req: Request, res: Response) => {
+    const schema = z.array(
+      z.object({
+        id: z.string().uuid(),
+        account_number: z.string().min(1),
+        account_name: z.string().min(1),
+        bank_name: z.string().min(1),
+        label: z.string().optional(),
+        is_active: z.boolean().default(true),
+      }),
+    );
+
+    const accounts = schema.parse(req.body.accounts);
+
+    await db
+      .update(tenants)
+      .set({
+        settings: sql`settings || ${JSON.stringify({ bank_accounts: accounts })}::jsonb`,
+        updated_at: new Date(),
+      })
+      .where(eq(tenants.id, req.tenantId!));
+
+    res.json({ data: accounts, message: "Bank accounts saved" });
   },
 );
 

@@ -21,6 +21,7 @@ import { generateCoaPdf } from "../services/pdfService";
 import { generateQRCode, generateQRHash } from "../services/qrService";
 import { sendNotification } from "../services/notificationService";
 import { logger } from "../utils/logger";
+import { computeParameters } from "../utils/resultComputation";
 import crypto from "crypto";
 
 const router = Router();
@@ -42,6 +43,8 @@ const parameterSchema = z.object({
 const createResultSchema = z.object({
   sample_id: z.string().uuid(),
   test_method_id: z.string().uuid().optional(),
+  template_id: z.string().uuid().optional(),
+  template_version: z.number().int().optional(),
   parameters: z.array(parameterSchema).min(1),
   notes: z.string().optional(),
 });
@@ -192,21 +195,7 @@ router.post(
       throw new AppError(400, "Sample already has an approved result");
 
     // Check for outliers
-    const parameters = body.parameters.map((p) => {
-      if (
-        p.data_type === "numerical" &&
-        typeof p.calculated_value === "number"
-      ) {
-        const hasMin = p.spec_min !== undefined;
-        const hasMax = p.spec_max !== undefined;
-        const belowMin = hasMin && p.calculated_value < p.spec_min!;
-        const aboveMax = hasMax && p.calculated_value > p.spec_max!;
-        const warning = belowMin || aboveMax;
-        const pass = !warning;
-        return { ...p, warning, pass };
-      }
-      return p;
-    });
+    const parameters = computeParameters(body.parameters);
 
     const [newResult] = await db
       .insert(results)
@@ -214,6 +203,8 @@ router.post(
         tenant_id: req.tenantId!,
         sample_id: body.sample_id,
         test_method_id: body.test_method_id,
+        template_id: body.template_id,
+        template_version: body.template_version,
         analyst_id: req.user!.id,
         parameters: parameters as any,
         notes: body.notes,

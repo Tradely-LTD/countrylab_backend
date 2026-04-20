@@ -17,6 +17,7 @@ import resultsRouter from "./routes/results";
 import suppliersRouter from "./routes/suppliers";
 import settingsRouter from "./routes/settings";
 import sampleRequestsRouter from "./routes/sample-requests";
+import resultTemplatesRouter from "./routes/result-templates";
 import {
   inventoryRouter,
   assetsRouter,
@@ -80,14 +81,38 @@ app.use(
 );
 
 // ─── Health Check ─────────────────────────────────────────────────────────────
-app.get("/health", (req, res) => {
-  res.json({
+app.get("/health", async (req, res) => {
+  const result: Record<string, any> = {
     status: "ok",
     app: "Countrylab LMS API",
     version: "1.0.0",
     schema: process.env.DATABASE_SCHEMA || "countrylab_lms",
     timestamp: new Date().toISOString(),
-  });
+    services: { database: "ok", supabase: "ok" },
+  };
+
+  // Check DB
+  try {
+    await checkDbConnection();
+  } catch {
+    result.status = "degraded";
+    result.services.database = "unreachable";
+  }
+
+  // Check Supabase reachability
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 3000);
+    await fetch(`${process.env.SUPABASE_URL}/rest/v1/`, {
+      signal: controller.signal,
+    });
+    clearTimeout(timeout);
+  } catch {
+    result.status = "degraded";
+    result.services.supabase = "unreachable";
+  }
+
+  res.status(result.status === "ok" ? 200 : 503).json(result);
 });
 
 // ─── API Routes ───────────────────────────────────────────────────────────────
@@ -108,6 +133,7 @@ app.use(`${API}/audit-logs`, auditRouter);
 app.use(`${API}/dashboard`, dashboardRouter);
 app.use(`${API}/notifications`, notificationsRouter);
 app.use(`${API}/invoices`, invoicesRouter);
+app.use(`${API}/result-templates`, resultTemplatesRouter);
 
 // Public verification endpoint (no auth)
 app.use(`${API}/results/verify`, resultsRouter);

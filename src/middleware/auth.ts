@@ -1,10 +1,10 @@
-import { Request, Response, NextFunction } from 'express';
-import jwt from 'jsonwebtoken';
-import { createClient } from '@supabase/supabase-js';
-import { db } from '../db';
-import { users } from '../db/schema';
-import { eq } from 'drizzle-orm';
-import { logger } from '../utils/logger';
+import { Request, Response, NextFunction } from "express";
+import jwt from "jsonwebtoken";
+import { createClient } from "@supabase/supabase-js";
+import { db } from "../db";
+import { users } from "../db/schema";
+import { eq } from "drizzle-orm";
+import { logger } from "../utils/logger";
 
 export interface AuthUser {
   id: string;
@@ -26,23 +26,42 @@ declare global {
 
 const supabase = createClient(
   process.env.SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
+  process.env.SUPABASE_SERVICE_ROLE_KEY!,
 );
 
-export async function authenticate(req: Request, res: Response, next: NextFunction) {
+export async function authenticate(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) {
   try {
     const authHeader = req.headers.authorization;
-    if (!authHeader?.startsWith('Bearer ')) {
-      return res.status(401).json({ error: 'No token provided' });
+    if (!authHeader?.startsWith("Bearer ")) {
+      return res.status(401).json({ error: "No token provided" });
     }
 
-    const token = authHeader.split(' ')[1];
+    const token = authHeader.split(" ")[1];
 
     // Verify with Supabase
-    const { data: { user: supabaseUser }, error } = await supabase.auth.getUser(token);
-
-    if (error || !supabaseUser) {
-      return res.status(401).json({ error: 'Invalid or expired token' });
+    let supabaseUser: any = null;
+    try {
+      const { data, error } = await supabase.auth.getUser(token);
+      if (error || !data.user) {
+        return res.status(401).json({ error: "Invalid or expired token" });
+      }
+      supabaseUser = data.user;
+    } catch (fetchErr: any) {
+      const isNetworkError =
+        fetchErr?.cause?.code === "ENOTFOUND" ||
+        fetchErr?.cause?.code === "ECONNREFUSED" ||
+        fetchErr?.name === "AbortError" ||
+        fetchErr?.message?.includes("fetch failed");
+      if (isNetworkError) {
+        return res
+          .status(503)
+          .json({ error: "Service unavailable", code: "NETWORK_UNREACHABLE" });
+      }
+      throw fetchErr;
     }
 
     // Get user from our DB
@@ -53,7 +72,7 @@ export async function authenticate(req: Request, res: Response, next: NextFuncti
       .limit(1);
 
     if (!dbUser || !dbUser.is_active) {
-      return res.status(401).json({ error: 'User not found or inactive' });
+      return res.status(401).json({ error: "User not found or inactive" });
     }
 
     req.user = {
@@ -68,19 +87,19 @@ export async function authenticate(req: Request, res: Response, next: NextFuncti
     req.tenantId = dbUser.tenant_id;
     next();
   } catch (error) {
-    logger.error('Auth middleware error:', error);
-    return res.status(500).json({ error: 'Authentication error' });
+    logger.error("Auth middleware error:", error);
+    return res.status(500).json({ error: "Authentication error" });
   }
 }
 
 export function requireRole(...roles: string[]) {
   return (req: Request, res: Response, next: NextFunction) => {
     if (!req.user) {
-      return res.status(401).json({ error: 'Not authenticated' });
+      return res.status(401).json({ error: "Not authenticated" });
     }
     if (!roles.includes(req.user.role)) {
       return res.status(403).json({
-        error: 'Insufficient permissions',
+        error: "Insufficient permissions",
         required: roles,
         current: req.user.role,
       });
@@ -90,9 +109,28 @@ export function requireRole(...roles: string[]) {
 }
 
 // Roles with elevated access
-export const ADMIN_ROLES = ['super_admin', 'md'];
-export const STAFF_ROLES = ['super_admin', 'md', 'quality_manager', 'lab_analyst', 'procurement_officer', 'inventory_manager', 'finance', 'business_development'];
-export const LAB_ROLES = ['super_admin', 'md', 'quality_manager', 'lab_analyst'];
-export const FINANCE_ROLES = ['super_admin', 'md', 'finance'];
-export const INVENTORY_ROLES = ['super_admin', 'md', 'inventory_manager', 'lab_analyst'];
-export const APPROVAL_ROLES = ['super_admin', 'md'];
+export const ADMIN_ROLES = ["super_admin", "md"];
+export const STAFF_ROLES = [
+  "super_admin",
+  "md",
+  "quality_manager",
+  "lab_analyst",
+  "procurement_officer",
+  "inventory_manager",
+  "finance",
+  "business_development",
+];
+export const LAB_ROLES = [
+  "super_admin",
+  "md",
+  "quality_manager",
+  "lab_analyst",
+];
+export const FINANCE_ROLES = ["super_admin", "md", "finance"];
+export const INVENTORY_ROLES = [
+  "super_admin",
+  "md",
+  "inventory_manager",
+  "lab_analyst",
+];
+export const APPROVAL_ROLES = ["super_admin", "md"];

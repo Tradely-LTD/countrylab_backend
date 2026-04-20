@@ -12,6 +12,7 @@ import {
   index,
   uniqueIndex,
   pgSchema,
+  date,
 } from "drizzle-orm/pg-core";
 import { relations } from "drizzle-orm";
 
@@ -185,10 +186,39 @@ export const clients = countrylabSchema.table("clients", {
   contact_person: varchar("contact_person", { length: 255 }),
   notes: text("notes"),
   is_active: boolean("is_active").default(true),
+  client_status: varchar("client_status", { length: 20 }).default("active"),
   created_by: uuid("created_by").references(() => users.id),
   created_at: timestamp("created_at").defaultNow(),
   updated_at: timestamp("updated_at").defaultNow(),
 });
+
+// ─── Client Interactions ──────────────────────────────────────────────────────
+
+export const client_interactions = countrylabSchema.table(
+  "client_interactions",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    tenant_id: uuid("tenant_id")
+      .references(() => tenants.id, { onDelete: "cascade" })
+      .notNull(),
+    client_id: uuid("client_id")
+      .references(() => clients.id, { onDelete: "cascade" })
+      .notNull(),
+    staff_id: uuid("staff_id")
+      .references(() => users.id)
+      .notNull(),
+    type: varchar("type", { length: 50 }).notNull(), // Call | Email | Visit | Meeting | Other
+    date: timestamp("date").notNull(),
+    notes: text("notes"),
+    outcome: varchar("outcome", { length: 50 }), // Interested | Not Interested | Follow-up Required | Converted
+    created_at: timestamp("created_at").defaultNow(),
+  },
+  (t) => ({
+    tenantIdx: index("client_interactions_tenant_idx").on(t.tenant_id),
+    clientIdx: index("client_interactions_client_idx").on(t.client_id),
+    staffIdx: index("client_interactions_staff_idx").on(t.staff_id),
+  }),
+);
 
 // ─── Suppliers ────────────────────────────────────────────────────────────────
 
@@ -357,6 +387,58 @@ export const sample_requests = countrylabSchema.table(
   }),
 );
 
+// ─── Result Templates ─────────────────────────────────────────────────────────
+
+export const result_templates = countrylabSchema.table(
+  "result_templates",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    tenant_id: uuid("tenant_id")
+      .references(() => tenants.id, { onDelete: "cascade" })
+      .notNull(),
+    name: varchar("name", { length: 255 }).notNull(),
+    nis_standard: varchar("nis_standard", { length: 100 }),
+    nis_standard_ref: varchar("nis_standard_ref", { length: 100 }),
+    effective_date: date("effective_date"),
+    version: integer("version").default(1),
+    parent_template_id: uuid("parent_template_id").references(
+      (): any => result_templates.id,
+    ),
+    is_active: boolean("is_active").default(true),
+    created_by: uuid("created_by").references(() => users.id),
+    created_at: timestamp("created_at").defaultNow(),
+    updated_at: timestamp("updated_at").defaultNow(),
+  },
+  (t) => ({
+    tenantIdx: index("result_templates_tenant_idx").on(t.tenant_id),
+    activeIdx: index("result_templates_active_idx").on(
+      t.tenant_id,
+      t.is_active,
+    ),
+  }),
+);
+
+export const result_template_parameters = countrylabSchema.table(
+  "result_template_parameters",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    template_id: uuid("template_id")
+      .references(() => result_templates.id, { onDelete: "cascade" })
+      .notNull(),
+    parameter_name: varchar("parameter_name", { length: 255 }).notNull(),
+    nis_limit: text("nis_limit"),
+    unit: varchar("unit", { length: 50 }),
+    parameter_group: varchar("parameter_group", { length: 100 }),
+    sequence_order: integer("sequence_order").default(0),
+    data_type: varchar("data_type", { length: 20 }).default("numerical"),
+    spec_min: real("spec_min"),
+    spec_max: real("spec_max"),
+  },
+  (t) => ({
+    templateIdx: index("result_template_params_template_idx").on(t.template_id),
+  }),
+);
+
 // ─── Results ──────────────────────────────────────────────────────────────────
 
 export const results = countrylabSchema.table(
@@ -387,6 +469,8 @@ export const results = countrylabSchema.table(
     voided_at: timestamp("voided_at"),
     void_reason: text("void_reason"),
     notes: text("notes"),
+    template_id: uuid("template_id").references(() => result_templates.id),
+    template_version: integer("template_version"),
     created_at: timestamp("created_at").defaultNow(),
     updated_at: timestamp("updated_at").defaultNow(),
   },
@@ -572,6 +656,9 @@ export const invoices = countrylabSchema.table("invoices", {
   line_items: jsonb("line_items").default([]),
   // [{description, quantity, unit_price, amount}]
   subtotal: real("subtotal").default(0),
+  discount_type: varchar("discount_type", { length: 20 }).default("percentage"),
+  discount_value: real("discount_value").default(0),
+  discount_amount: real("discount_amount").default(0),
   tax_rate: real("tax_rate").default(0),
   tax_amount: real("tax_amount").default(0),
   total: real("total").default(0),
@@ -702,6 +789,10 @@ export const resultsRelations = relations(results, ({ one, many }) => ({
   }),
   analyst: one(users, { fields: [results.analyst_id], references: [users.id] }),
   changes: many(result_changes),
+  template: one(result_templates, {
+    fields: [results.template_id],
+    references: [result_templates.id],
+  }),
 }));
 
 export const suppliersRelations = relations(suppliers, ({ one, many }) => ({
@@ -723,3 +814,37 @@ export const reagentsRelations = relations(reagents, ({ one }) => ({
     references: [suppliers.id],
   }),
 }));
+
+export const resultTemplatesRelations = relations(
+  result_templates,
+  ({ one, many }) => ({
+    tenant: one(tenants, {
+      fields: [result_templates.tenant_id],
+      references: [tenants.id],
+    }),
+    createdBy: one(users, {
+      fields: [result_templates.created_by],
+      references: [users.id],
+    }),
+    parentTemplate: one(result_templates, {
+      fields: [result_templates.parent_template_id],
+      references: [result_templates.id],
+      relationName: "templateVersions",
+    }),
+    childTemplates: many(result_templates, {
+      relationName: "templateVersions",
+    }),
+    parameters: many(result_template_parameters),
+    results: many(results),
+  }),
+);
+
+export const resultTemplateParametersRelations = relations(
+  result_template_parameters,
+  ({ one }) => ({
+    template: one(result_templates, {
+      fields: [result_template_parameters.template_id],
+      references: [result_templates.id],
+    }),
+  }),
+);

@@ -1,10 +1,11 @@
 import { Router, Request, Response } from "express";
 import { z } from "zod";
-import { eq, and, desc, sql, gte } from "drizzle-orm";
+import { eq, and, desc, sql, gte, lte } from "drizzle-orm";
 import { db } from "../db";
 import {
   clients,
   users,
+  client_interactions,
   audit_logs,
   samples,
   results,
@@ -24,9 +25,10 @@ import {
 } from "../middleware/auth";
 import { createAuditLog } from "../middleware/audit";
 import { AppError } from "../middleware/errorHandler";
+import { computeInvoiceTotals } from "../utils/invoiceComputation";
 import { createClient as supabaseAdmin } from "@supabase/supabase-js";
 import bcrypt from "bcryptjs";
-import { lte, lt } from "drizzle-orm";
+import { lt } from "drizzle-orm";
 
 // ════════════════════════════════════════════════════════════════
 // CLIENTS ROUTER
@@ -44,20 +46,181 @@ const clientSchema = z.object({
 });
 
 clientsRouter.get("/", authenticate, async (req: Request, res: Response) => {
-  const { search } = req.query as { search?: string };
+  const { search, created_by, from, to, status } = req.query as {
+    search?: string;
+    created_by?: string;
+    from?: string;
+    to?: string;
+    status?: string;
+  };
+
   const conditions = [eq(clients.tenant_id, req.tenantId!)];
+
   if (search)
     conditions.push(
       sql`(${clients.name} ILIKE ${"%" + search + "%"} OR ${clients.company} ILIKE ${"%" + search + "%"})`,
     );
 
-  const list = await db
-    .select()
-    .from(clients)
-    .where(and(...conditions))
-    .orderBy(clients.name);
-  res.json({ data: list });
+  if (created_by) conditions.push(eq(clients.created_by, created_by));
+
+  if (from) conditions.push(gte(clients.created_at, new Date(from)));
+  if (to) {
+    // inclusive: set time to end of day
+    const toDate = new Date(to);
+    toDate.setHours(23, 59, 59, 999);
+    conditions.push(lte(clients.created_at, toDate));
+  }
+
+  if (status && (status === "lead" || status === "active"))
+    conditions.push(eq(clients.client_status, status));
+
+  const whereClause = and(...conditions);
+
+  // Alias users table for the join
+  const creatorAlias = users;
+
+  const [list, totalResult, leadsResult, interactionsResult] =
+    await Promise.all([
+      db
+        .select({
+          id: clients.id,
+          tenant_id: clients.tenant_id,
+          name: clients.name,
+          company: clients.company,
+          email: clients.email,
+          phone: clients.phone,
+          address: clients.address,
+          city: clients.city,
+          state: clients.state,
+          postal_code: clients.postal_code,
+          country: clients.country,
+          tax_id: clients.tax_id,
+          website: clients.website,
+          contact_person: clients.contact_person,
+          notes: clients.notes,
+          is_active: clients.is_active,
+          client_status: clients.client_status,
+          created_by: clients.created_by,
+          created_at: clients.created_at,
+          updated_at: clients.updated_at,
+          creator_name: creatorAlias.full_name,
+        })
+        .from(clients)
+        .leftJoin(creatorAlias, eq(clients.created_by, creatorAlias.id))
+        .where(whereClause)
+        .orderBy(clients.name),
+
+      db
+        .select({ count: sql<number>`count(*)::int` })
+        .from(clients)
+        .where(whereClause),
+
+      db
+        .select({ count: sql<number>`count(*)::int` })
+        .from(clients)
+        .where(and(whereClause, eq(clients.client_status, "lead"))),
+
+      db
+        .select({ count: sql<number>`count(*)::int` })
+        .from(client_interactions)
+        .where(
+          and(
+            eq(client_interactions.tenant_id, req.tenantId!),
+            // scope interactions to clients matching the same filters
+            created_by
+              ? sql`${client_interactions.client_id} IN (SELECT id FROM countrylab_lms.clients WHERE tenant_id = ${req.tenantId!} AND created_by = ${created_by})`
+              : sql`${client_interactions.client_id} IN (SELECT id FROM countrylab_lms.clients WHERE tenant_id = ${req.tenantId!})`,
+          ),
+        ),
+    ]);
+
+  res.json({
+    data: list,
+    summary: {
+      total: totalResult[0]?.count ?? 0,
+      leads: leadsResult[0]?.count ?? 0,
+      interactions: interactionsResult[0]?.count ?? 0,
+    },
+  });
 });
+
+// GET /clients/export — must be registered BEFORE /:id to avoid path conflict
+clientsRouter.get(
+  "/export",
+  authenticate,
+  async (req: Request, res: Response) => {
+    const { created_by, from, to, status } = req.query as {
+      created_by?: string;
+      from?: string;
+      to?: string;
+      status?: string;
+    };
+
+    const conditions = [eq(clients.tenant_id, req.tenantId!)];
+
+    if (created_by) conditions.push(eq(clients.created_by, created_by));
+
+    if (from) conditions.push(gte(clients.created_at, new Date(from)));
+    if (to) {
+      const toDate = new Date(to);
+      toDate.setHours(23, 59, 59, 999);
+      conditions.push(lte(clients.created_at, toDate));
+    }
+
+    if (status && (status === "lead" || status === "active"))
+      conditions.push(eq(clients.client_status, status));
+
+    const list = await db
+      .select({
+        name: clients.name,
+        company: clients.company,
+        contact_person: clients.contact_person,
+        email: clients.email,
+        phone: clients.phone,
+        created_at: clients.created_at,
+        creator_name: users.full_name,
+      })
+      .from(clients)
+      .leftJoin(users, eq(clients.created_by, users.id))
+      .where(and(...conditions))
+      .orderBy(clients.name);
+
+    if (list.length === 0) {
+      res.status(400).json({ message: "No data to export" });
+      return;
+    }
+
+    const csvEscape = (v: any) =>
+      '"' + String(v ?? "").replace(/"/g, '""') + '"';
+
+    const header =
+      "Client Name,Company,Contact Person,Email,Phone,Created By,Created Date";
+    const rows = list.map((r) =>
+      [
+        csvEscape(r.name),
+        csvEscape(r.company),
+        csvEscape(r.contact_person),
+        csvEscape(r.email),
+        csvEscape(r.phone),
+        csvEscape(r.creator_name),
+        csvEscape(
+          r.created_at
+            ? new Date(r.created_at).toISOString().split("T")[0]
+            : "",
+        ),
+      ].join(","),
+    );
+
+    const csv = [header, ...rows].join("\r\n");
+
+    res.setHeader("Content-Type", "text/csv");
+    res.setHeader(
+      "Content-Disposition",
+      'attachment; filename="clients-export.csv"',
+    );
+    res.send(csv);
+  },
+);
 
 clientsRouter.get("/:id", authenticate, async (req: Request, res: Response) => {
   const [client] = await db
@@ -199,6 +362,171 @@ clientsRouter.get(
         samples: clientSamples,
       },
     });
+  },
+);
+
+// PATCH /clients/:id/status — update lead/active status
+clientsRouter.patch(
+  "/:id/status",
+  authenticate,
+  requireRole(
+    "super_admin",
+    "md",
+    "quality_manager",
+    "business_development",
+    "finance",
+  ),
+  async (req: Request, res: Response) => {
+    const { status } = z
+      .object({ status: z.enum(["lead", "active"]) })
+      .parse(req.body);
+
+    const [updated] = await db
+      .update(clients)
+      .set({ client_status: status, updated_at: new Date() })
+      .where(
+        and(
+          eq(clients.id, req.params.id),
+          eq(clients.tenant_id, req.tenantId!),
+        ),
+      )
+      .returning();
+
+    if (!updated) throw new AppError(404, "Client not found");
+
+    await createAuditLog({
+      tenant_id: req.tenantId!,
+      user_id: req.user!.id,
+      action: "UPDATE",
+      table_name: "clients",
+      record_id: updated.id,
+      metadata: { action: "status_change", status },
+    });
+
+    res.json({ data: updated });
+  },
+);
+
+// POST /clients/:id/interactions — log a CRM interaction
+clientsRouter.post(
+  "/:id/interactions",
+  authenticate,
+  requireRole(
+    "super_admin",
+    "md",
+    "quality_manager",
+    "business_development",
+    "finance",
+  ),
+  async (req: Request, res: Response) => {
+    const body = z
+      .object({
+        type: z.enum(["Call", "Email", "Visit", "Meeting", "Other"]),
+        date: z.string(),
+        notes: z.string().optional(),
+        outcome: z
+          .enum([
+            "Interested",
+            "Not Interested",
+            "Follow-up Required",
+            "Converted",
+          ])
+          .optional(),
+      })
+      .parse(req.body);
+
+    // Verify client belongs to tenant
+    const [client] = await db
+      .select({ id: clients.id, client_status: clients.client_status })
+      .from(clients)
+      .where(
+        and(
+          eq(clients.id, req.params.id),
+          eq(clients.tenant_id, req.tenantId!),
+        ),
+      )
+      .limit(1);
+
+    if (!client) throw new AppError(404, "Client not found");
+
+    const [interaction] = await db
+      .insert(client_interactions)
+      .values({
+        tenant_id: req.tenantId!,
+        client_id: req.params.id,
+        staff_id: req.user!.id,
+        type: body.type,
+        date: new Date(body.date),
+        notes: body.notes,
+        outcome: body.outcome,
+      })
+      .returning();
+
+    // If outcome is Converted, promote client to active
+    if (body.outcome === "Converted") {
+      await db
+        .update(clients)
+        .set({ client_status: "active", updated_at: new Date() })
+        .where(eq(clients.id, req.params.id));
+    }
+
+    // Return interaction with staff name
+    const [result] = await db
+      .select({
+        id: client_interactions.id,
+        tenant_id: client_interactions.tenant_id,
+        client_id: client_interactions.client_id,
+        staff_id: client_interactions.staff_id,
+        type: client_interactions.type,
+        date: client_interactions.date,
+        notes: client_interactions.notes,
+        outcome: client_interactions.outcome,
+        created_at: client_interactions.created_at,
+        staff_name: users.full_name,
+      })
+      .from(client_interactions)
+      .leftJoin(users, eq(client_interactions.staff_id, users.id))
+      .where(eq(client_interactions.id, interaction.id))
+      .limit(1);
+
+    res.status(201).json({ data: result });
+  },
+);
+
+// GET /clients/:id/interactions — list interactions for a client
+clientsRouter.get(
+  "/:id/interactions",
+  authenticate,
+  async (req: Request, res: Response) => {
+    const conditions = [
+      eq(client_interactions.client_id, req.params.id),
+      eq(client_interactions.tenant_id, req.tenantId!),
+    ];
+
+    // Staff can only see their own interactions
+    if (req.user!.role === "staff") {
+      conditions.push(eq(client_interactions.staff_id, req.user!.id));
+    }
+
+    const list = await db
+      .select({
+        id: client_interactions.id,
+        tenant_id: client_interactions.tenant_id,
+        client_id: client_interactions.client_id,
+        staff_id: client_interactions.staff_id,
+        type: client_interactions.type,
+        date: client_interactions.date,
+        notes: client_interactions.notes,
+        outcome: client_interactions.outcome,
+        created_at: client_interactions.created_at,
+        staff_name: users.full_name,
+      })
+      .from(client_interactions)
+      .leftJoin(users, eq(client_interactions.staff_id, users.id))
+      .where(and(...conditions))
+      .orderBy(desc(client_interactions.date));
+
+    res.json({ data: list });
   },
 );
 
@@ -697,6 +1025,9 @@ invoicesRouter.get(
         invoice_number: invoices.invoice_number,
         line_items: invoices.line_items,
         subtotal: invoices.subtotal,
+        discount_type: invoices.discount_type,
+        discount_value: invoices.discount_value,
+        discount_amount: invoices.discount_amount,
         tax_rate: invoices.tax_rate,
         tax_amount: invoices.tax_amount,
         total: invoices.total,
@@ -767,9 +1098,23 @@ invoicesRouter.post(
           }),
         ),
         tax_rate: z.number().default(7.5), // Default VAT in Nigeria
+        discount_type: z.enum(["percentage", "fixed"]).default("percentage"),
+        discount_value: z.number().min(0).default(0),
         due_date: z.string().optional().or(z.literal("")),
         notes: z.string().optional(),
         currency: z.string().default("NGN"),
+      })
+      .superRefine((data, ctx) => {
+        if (data.discount_type === "percentage" && data.discount_value > 100) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.too_big,
+            maximum: 100,
+            type: "number",
+            inclusive: true,
+            message: "Percentage discount must be between 0 and 100",
+            path: ["discount_value"],
+          });
+        }
       })
       .parse(req.body);
 
@@ -777,8 +1122,12 @@ invoicesRouter.post(
       (sum, item) => sum + item.amount,
       0,
     );
-    const taxAmount = subtotal * (body.tax_rate / 100);
-    const total = subtotal + taxAmount;
+    const { discountAmount, taxAmount, total } = computeInvoiceTotals(
+      subtotal,
+      body.tax_rate,
+      body.discount_type,
+      body.discount_value,
+    );
 
     // Generate invoice number with date prefix
     const now = new Date();
@@ -800,6 +1149,9 @@ invoicesRouter.post(
           body.result_id && body.result_id !== "" ? body.result_id : undefined,
         line_items: body.line_items as any,
         subtotal,
+        discount_type: body.discount_type,
+        discount_value: body.discount_value,
+        discount_amount: discountAmount,
         tax_rate: body.tax_rate,
         tax_amount: taxAmount,
         total,
@@ -856,9 +1208,27 @@ invoicesRouter.put(
           )
           .optional(),
         tax_rate: z.number().optional(),
+        discount_type: z.enum(["percentage", "fixed"]).optional(),
+        discount_value: z.number().min(0).optional(),
         due_date: z.string().datetime().optional(),
         notes: z.string().optional(),
         status: z.enum(["unpaid", "paid", "partial", "voided"]).optional(),
+      })
+      .superRefine((data, ctx) => {
+        if (
+          data.discount_type === "percentage" &&
+          data.discount_value !== undefined &&
+          data.discount_value > 100
+        ) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.too_big,
+            maximum: 100,
+            type: "number",
+            inclusive: true,
+            message: "Percentage discount must be between 0 and 100",
+            path: ["discount_value"],
+          });
+        }
       })
       .parse(req.body);
 
@@ -880,19 +1250,37 @@ invoicesRouter.put(
 
     let updateData: any = { updated_at: new Date() };
 
-    if (body.line_items) {
-      const subtotal = body.line_items.reduce(
-        (sum, item) => sum + item.amount,
+    if (
+      body.line_items ||
+      body.discount_type !== undefined ||
+      body.discount_value !== undefined ||
+      body.tax_rate !== undefined
+    ) {
+      const lineItems = body.line_items ?? (existing.line_items as any[]);
+      const subtotal = lineItems.reduce(
+        (sum: number, item: any) => sum + item.amount,
         0,
       );
       const taxRate = body.tax_rate ?? existing.tax_rate ?? 0;
-      const taxAmount = subtotal * (taxRate / 100);
-      const total = subtotal + taxAmount;
+      const discountType = (body.discount_type ??
+        existing.discount_type ??
+        "percentage") as "percentage" | "fixed";
+      const discountValue = body.discount_value ?? existing.discount_value ?? 0;
+
+      const { discountAmount, taxAmount, total } = computeInvoiceTotals(
+        subtotal,
+        taxRate,
+        discountType,
+        discountValue,
+      );
 
       updateData = {
         ...updateData,
-        line_items: body.line_items,
+        ...(body.line_items ? { line_items: body.line_items } : {}),
         subtotal,
+        discount_type: discountType,
+        discount_value: discountValue,
+        discount_amount: discountAmount,
         tax_rate: taxRate,
         tax_amount: taxAmount,
         total,
