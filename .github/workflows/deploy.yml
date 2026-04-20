@@ -1,0 +1,50 @@
+name: Deploy Backend to Linode
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    name: Deploy to Production Server
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "18"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build application
+        run: npm run build
+
+      - name: Deploy to Linode Server
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: ${{ secrets.SSH_PORT }}
+          script: |
+            cd /var/www/countrylab/backend
+            git pull origin main
+            npm install --production
+            npm run build
+            pm2 restart countrylab-backend
+            echo "Backend deployment completed successfully!"
+
+      - name: Deployment Status
+        if: success()
+        run: echo "✅ Backend deployed successfully to Linode server!"
+
+      - name: Deployment Failed
+        if: failure()
+        run: echo "❌ Backend deployment failed. Check logs for details."
