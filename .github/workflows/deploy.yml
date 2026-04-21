@@ -17,7 +17,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "18"
+          node-version: "20"
           cache: "npm"
 
       - name: Install dependencies
@@ -34,12 +34,39 @@ jobs:
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           port: ${{ secrets.SSH_PORT }}
           script: |
-            cd /var/www/countrylab/backend
-            git pull origin main
+            # Navigate to countrylab directory
+            cd /var/www/countrylab
+
+            # Check if backend directory exists, if not create it
+            if [ ! -d "backend" ]; then
+              echo "Creating backend directory..."
+              mkdir -p backend
+              cd backend
+              git clone https://github.com/Tradely-LTD/countrylab_backend.git .
+            else
+              cd backend
+            fi
+
+            # Pull latest changes
+            echo "Pulling latest changes..."
+            git pull origin main || git clone https://github.com/Tradely-LTD/countrylab_backend.git .
+
+            # Install dependencies
+            echo "Installing dependencies..."
             npm install --production
+
+            # Build application
+            echo "Building application..."
             npm run build
-            pm2 restart countrylab-backend
-            echo "Backend deployment completed successfully!"
+
+            # Restart PM2 process
+            echo "Restarting backend..."
+            pm2 restart countrylab-backend || pm2 start dist/index.js --name countrylab-backend
+
+            # Save PM2 configuration
+            pm2 save
+
+            echo "✅ Backend deployment completed successfully!"
 
       - name: Deployment Status
         if: success()
