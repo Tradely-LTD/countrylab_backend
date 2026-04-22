@@ -21,8 +21,13 @@ if (!fs.existsSync(UPLOAD_DIR)) {
 }
 
 const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    const tenantDir = path.join(UPLOAD_DIR, req.tenantId!);
+  destination: (req: any, file, cb) => {
+    // tenantId is set by authenticate middleware which runs before multer
+    const tenantId = req.tenantId || req.user?.tenant_id;
+    if (!tenantId) {
+      return cb(new Error("Tenant ID not found"), "");
+    }
+    const tenantDir = path.join(UPLOAD_DIR, tenantId);
     if (!fs.existsSync(tenantDir)) {
       fs.mkdirSync(tenantDir, { recursive: true });
     }
@@ -49,6 +54,25 @@ const upload = multer({
     cb(new Error("Only image files (jpeg, jpg, png, svg) are allowed"));
   },
 });
+
+// Error handler for multer errors
+const handleMulterError = (
+  err: any,
+  req: Request,
+  res: Response,
+  next: any,
+) => {
+  if (err instanceof multer.MulterError) {
+    if (err.code === "LIMIT_FILE_SIZE") {
+      return res.status(400).json({ error: "File size must be less than 5MB" });
+    }
+    return res.status(400).json({ error: err.message });
+  }
+  if (err) {
+    return res.status(400).json({ error: err.message || "File upload failed" });
+  }
+  next();
+};
 
 // ─── GET Organization Settings ────────────────────────────────────────────────
 
@@ -152,7 +176,14 @@ router.post(
   "/organization/logo",
   authenticate,
   requireRole(...ADMIN_ROLES),
-  upload.single("logo"),
+  (req, res, next) => {
+    upload.single("logo")(req, res, (err) => {
+      if (err) {
+        return handleMulterError(err, req, res, next);
+      }
+      next();
+    });
+  },
   async (req: Request, res: Response) => {
     if (!req.file) {
       throw new AppError(400, "No file uploaded");
@@ -171,11 +202,33 @@ router.post(
     if (currentTenant?.logo_url) {
       const oldLogoPath = path.join(process.cwd(), currentTenant.logo_url);
       if (fs.existsSync(oldLogoPath)) {
-        fs.unlinkSync(oldLogoPath);
+        try {
+          fs.unlinkSync(oldLogoPath);
+        } catch (error) {
+          console.error("Failed to delete old logo:", error);
+        }
       }
     }
 
-    // Update tenant with new logo URL
+    // If tenant doesn't exist yet, create a minimal record
+    if (!currentTenant) {
+      const [created] = await db
+        .insert(tenants)
+        .values({
+          id: req.tenantId!,
+          name: "New Organization", // Placeholder name
+          slug: `tenant-${req.tenantId!.slice(0, 8)}`, // Temporary slug
+          logo_url: logoUrl,
+        })
+        .returning();
+
+      return res.json({
+        data: { logo_url: logoUrl },
+        message: "Logo uploaded successfully",
+      });
+    }
+
+    // Update existing tenant with new logo URL
     const [updated] = await db
       .update(tenants)
       .set({ logo_url: logoUrl, updated_at: new Date() })
@@ -202,13 +255,25 @@ router.delete(
       .where(eq(tenants.id, req.tenantId!))
       .limit(1);
 
-    if (currentTenant?.logo_url) {
+    // If tenant doesn't exist, nothing to delete
+    if (!currentTenant) {
+      return res.json({ message: "No logo to delete" });
+    }
+
+    // Delete logo file if exists
+    if (currentTenant.logo_url) {
       const logoPath = path.join(process.cwd(), currentTenant.logo_url);
       if (fs.existsSync(logoPath)) {
-        fs.unlinkSync(logoPath);
+        try {
+          fs.unlinkSync(logoPath);
+        } catch (error) {
+          // Log error but don't fail the request
+          console.error("Failed to delete logo file:", error);
+        }
       }
     }
 
+    // Update tenant to remove logo URL
     const [updated] = await db
       .update(tenants)
       .set({ logo_url: null, updated_at: new Date() })
