@@ -11,6 +11,7 @@ const errorHandler_1 = require("../middleware/errorHandler");
 const pdfService_1 = require("../services/pdfService");
 const qrService_1 = require("../services/qrService");
 const notificationService_1 = require("../services/notificationService");
+const resultComputation_1 = require("../utils/resultComputation");
 const router = (0, express_1.Router)();
 // ─── Validation ───────────────────────────────────────────────────────────────
 const parameterSchema = zod_1.z.object({
@@ -27,6 +28,8 @@ const parameterSchema = zod_1.z.object({
 const createResultSchema = zod_1.z.object({
     sample_id: zod_1.z.string().uuid(),
     test_method_id: zod_1.z.string().uuid().optional(),
+    template_id: zod_1.z.string().uuid().optional(),
+    template_version: zod_1.z.number().int().optional(),
     parameters: zod_1.z.array(parameterSchema).min(1),
     notes: zod_1.z.string().optional(),
 });
@@ -148,25 +151,15 @@ router.post("/", auth_1.authenticate, (0, auth_1.requireRole)(...auth_1.LAB_ROLE
     if (sample.status === "approved")
         throw new errorHandler_1.AppError(400, "Sample already has an approved result");
     // Check for outliers
-    const parameters = body.parameters.map((p) => {
-        if (p.data_type === "numerical" &&
-            typeof p.calculated_value === "number") {
-            const hasMin = p.spec_min !== undefined;
-            const hasMax = p.spec_max !== undefined;
-            const belowMin = hasMin && p.calculated_value < p.spec_min;
-            const aboveMax = hasMax && p.calculated_value > p.spec_max;
-            const warning = belowMin || aboveMax;
-            const pass = !warning;
-            return { ...p, warning, pass };
-        }
-        return p;
-    });
+    const parameters = (0, resultComputation_1.computeParameters)(body.parameters);
     const [newResult] = await db_1.db
         .insert(schema_1.results)
         .values({
         tenant_id: req.tenantId,
         sample_id: body.sample_id,
         test_method_id: body.test_method_id,
+        template_id: body.template_id,
+        template_version: body.template_version,
         analyst_id: req.user.id,
         parameters: parameters,
         notes: body.notes,

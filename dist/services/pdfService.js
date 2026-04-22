@@ -35,6 +35,16 @@ async function generateCoaPdf(data) {
             .from(schema_1.users)
             .where((0, drizzle_orm_1.eq)(schema_1.users.id, result.analyst_id))
             .limit(1);
+        // Fetch NIS standard reference from template if one was used
+        let nisStandardRef = null;
+        if (result.template_id) {
+            const [template] = await db_1.db
+                .select({ nis_standard_ref: schema_1.result_templates.nis_standard_ref })
+                .from(schema_1.result_templates)
+                .where((0, drizzle_orm_1.eq)(schema_1.result_templates.id, result.template_id))
+                .limit(1);
+            nisStandardRef = template?.nis_standard_ref ?? null;
+        }
         const verifyUrl = `${process.env.FRONTEND_URL}/verify/${data.qr_hash}`;
         const qrImageUrl = `https://api.qrserver.com/v1/create-qr-code/?size=120x120&data=${encodeURIComponent(verifyUrl)}`;
         // Build HTML for CoA
@@ -46,46 +56,47 @@ async function generateCoaPdf(data) {
             analyst,
             qrImageUrl,
             verifyUrl,
+            nisStandardRef,
         });
         // In production, use Puppeteer to render HTML to PDF
         // For MVP, generate HTML-based CoA and store as file
-        const pdfBuffer = Buffer.from(html, 'utf-8');
+        const pdfBuffer = Buffer.from(html, "utf-8");
         const fileName = `coa/${data.tenant_id}/${data.result_id}.html`;
         const { error } = await supabase.storage
-            .from(process.env.SUPABASE_STORAGE_BUCKET || 'countrylab-files')
+            .from(process.env.SUPABASE_STORAGE_BUCKET || "countrylab-files")
             .upload(fileName, pdfBuffer, {
-            contentType: 'text/html',
+            contentType: "text/html",
             upsert: true,
         });
         if (error) {
-            logger_1.logger.error('CoA upload error:', error);
+            logger_1.logger.error("CoA upload error:", error);
             return verifyUrl;
         }
         const { data: urlData } = supabase.storage
-            .from(process.env.SUPABASE_STORAGE_BUCKET || 'countrylab-files')
+            .from(process.env.SUPABASE_STORAGE_BUCKET || "countrylab-files")
             .getPublicUrl(fileName);
         return urlData.publicUrl;
     }
     catch (error) {
-        logger_1.logger.error('PDF generation error:', error);
+        logger_1.logger.error("PDF generation error:", error);
         return `${process.env.FRONTEND_URL}/verify/${data.qr_hash}`;
     }
 }
 function buildCoaHtml(ctx) {
-    const { result, sample, client, tenant, analyst, qrImageUrl, verifyUrl } = ctx;
+    const { result, sample, client, tenant, analyst, qrImageUrl, verifyUrl, nisStandardRef, } = ctx;
     const params = result.parameters;
     const paramRows = params
         .map((p) => `
     <tr>
       <td>${p.param_name}</td>
-      <td>${p.calculated_value ?? p.raw_value ?? '—'}</td>
-      <td>${p.unit || '—'}</td>
-      <td>${p.spec_min !== undefined ? p.spec_min : '—'} – ${p.spec_max !== undefined ? p.spec_max : '—'}</td>
-      <td style="color:${p.pass ? '#065f46' : '#dc2626'}; font-weight:600">
-        ${p.data_type === 'qualitative' ? (p.raw_value || '—') : (p.pass ? 'PASS' : 'FAIL')}
+      <td>${p.calculated_value ?? p.raw_value ?? "—"}</td>
+      <td>${p.unit || "—"}</td>
+      <td>${p.spec_min !== undefined ? p.spec_min : "—"} – ${p.spec_max !== undefined ? p.spec_max : "—"}</td>
+      <td style="color:${p.pass ? "#065f46" : "#dc2626"}; font-weight:600">
+        ${p.data_type === "qualitative" ? p.raw_value || "—" : p.pass ? "PASS" : "FAIL"}
       </td>
     </tr>`)
-        .join('');
+        .join("");
     const allPass = params.every((p) => p.pass !== false);
     return `<!DOCTYPE html>
 <html>
@@ -99,7 +110,7 @@ function buildCoaHtml(ctx) {
     .header { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 3px solid #1a56db; padding-bottom: 24px; margin-bottom: 24px; }
     .lab-name { font-family: 'DM Serif Display', serif; font-size: 28px; color: #1e429f; }
     .doc-title { font-size: 14px; text-transform: uppercase; letter-spacing: 2px; color: #64748b; margin-top: 4px; }
-    .badge { background: ${allPass ? '#d1fae5' : '#fee2e2'}; color: ${allPass ? '#065f46' : '#dc2626'}; font-size: 12px; font-weight: 600; padding: 4px 12px; border-radius: 20px; text-transform: uppercase; letter-spacing: 1px; }
+    .badge { background: ${allPass ? "#d1fae5" : "#fee2e2"}; color: ${allPass ? "#065f46" : "#dc2626"}; font-size: 12px; font-weight: 600; padding: 4px 12px; border-radius: 20px; text-transform: uppercase; letter-spacing: 1px; }
     .section { margin-bottom: 24px; }
     .section h3 { font-size: 11px; text-transform: uppercase; letter-spacing: 2px; color: #64748b; margin-bottom: 12px; border-bottom: 1px solid #e2e8f0; padding-bottom: 6px; }
     .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
@@ -116,22 +127,23 @@ function buildCoaHtml(ctx) {
     .signature { margin-top: 32px; border-top: 1px solid #e2e8f0; padding-top: 24px; display: flex; justify-content: space-between; }
     .sig-block { text-align: center; min-width: 180px; }
     .sig-line { border-top: 1px solid #1e293b; padding-top: 6px; font-size: 11px; color: #64748b; }
-    .watermark { color: ${allPass ? '#d1fae5' : '#fee2e2'}; font-size: 72px; font-weight: 900; position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%) rotate(-30deg); opacity: 0.15; pointer-events: none; z-index: 0; }
+    .watermark { color: ${allPass ? "#d1fae5" : "#fee2e2"}; font-size: 72px; font-weight: 900; position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%) rotate(-30deg); opacity: 0.15; pointer-events: none; z-index: 0; }
   </style>
 </head>
 <body>
-  <div class="watermark">${allPass ? 'PASS' : 'FAIL'}</div>
+  <div class="watermark">${allPass ? "PASS" : "FAIL"}</div>
   
   <div class="header">
     <div>
-      <div class="lab-name">${tenant?.name || 'Countrylab'}</div>
+      <div class="lab-name">${tenant?.name || "Countrylab"}</div>
       <div class="doc-title">Certificate of Analysis</div>
-      ${tenant?.accreditation_number ? `<div style="font-size:11px;color:#64748b;margin-top:4px">Accreditation No: ${tenant.accreditation_number}</div>` : ''}
+      ${tenant?.accreditation_number ? `<div style="font-size:11px;color:#64748b;margin-top:4px">Accreditation No: ${tenant.accreditation_number}</div>` : ""}
+      ${nisStandardRef ? `<div style="font-size:11px;color:#64748b;margin-top:4px">Standard: ${nisStandardRef}</div>` : ""}
     </div>
     <div style="text-align:right">
-      <span class="badge">${allPass ? 'All Tests Passed' : 'Some Tests Failed'}</span>
+      <span class="badge">${allPass ? "All Tests Passed" : "Some Tests Failed"}</span>
       <div style="font-size:11px;color:#64748b;margin-top:8px">Report No: ${sample.ulid}</div>
-      <div style="font-size:11px;color:#64748b">Date: ${new Date(result.approved_at || result.created_at).toLocaleDateString('en-GB', { day: '2-digit', month: 'long', year: 'numeric' })}</div>
+      <div style="font-size:11px;color:#64748b">Date: ${new Date(result.approved_at || result.created_at).toLocaleDateString("en-GB", { day: "2-digit", month: "long", year: "numeric" })}</div>
     </div>
   </div>
 
@@ -140,18 +152,18 @@ function buildCoaHtml(ctx) {
     <div class="grid-2">
       <div class="field"><label>Sample ID</label><span>${sample.ulid}</span></div>
       <div class="field"><label>Sample Name</label><span>${sample.name}</span></div>
-      <div class="field"><label>Matrix</label><span>${sample.matrix || '—'}</span></div>
-      <div class="field"><label>Collection Date</label><span>${sample.collection_date ? new Date(sample.collection_date).toLocaleDateString('en-GB') : '—'}</span></div>
-      <div class="field"><label>Date Received</label><span>${new Date(sample.received_at).toLocaleDateString('en-GB')}</span></div>
-      <div class="field"><label>Storage Location</label><span>${sample.storage_location || '—'}</span></div>
+      <div class="field"><label>Matrix</label><span>${sample.matrix || "—"}</span></div>
+      <div class="field"><label>Collection Date</label><span>${sample.collection_date ? new Date(sample.collection_date).toLocaleDateString("en-GB") : "—"}</span></div>
+      <div class="field"><label>Date Received</label><span>${new Date(sample.received_at).toLocaleDateString("en-GB")}</span></div>
+      <div class="field"><label>Storage Location</label><span>${sample.storage_location || "—"}</span></div>
     </div>
   </div>
 
   <div class="section">
     <h3>Client Information</h3>
     <div class="grid-2">
-      <div class="field"><label>Client Name</label><span>${client?.name || '—'}</span></div>
-      <div class="field"><label>Company</label><span>${client?.company || '—'}</span></div>
+      <div class="field"><label>Client Name</label><span>${client?.name || "—"}</span></div>
+      <div class="field"><label>Company</label><span>${client?.company || "—"}</span></div>
     </div>
   </div>
 
@@ -171,7 +183,7 @@ function buildCoaHtml(ctx) {
     <img src="${qrImageUrl}" alt="Verification QR Code" />
     <div class="qr-text">
       <strong>Scan to Verify Authenticity</strong>
-      This QR code links to a secure verification page hosted by ${tenant?.name || 'Countrylab'}.<br/>
+      This QR code links to a secure verification page hosted by ${tenant?.name || "Countrylab"}.<br/>
       Verified at: <a href="${verifyUrl}" style="color:#1a56db">${verifyUrl}</a>
     </div>
   </div>
@@ -179,7 +191,7 @@ function buildCoaHtml(ctx) {
   <div class="signature">
     <div class="sig-block">
       <div style="margin-bottom:40px"></div>
-      <div class="sig-line">${analyst?.full_name || 'Laboratory Analyst'}<br/>Analyst</div>
+      <div class="sig-line">${analyst?.full_name || "Laboratory Analyst"}<br/>Analyst</div>
     </div>
     <div class="sig-block">
       <div style="margin-bottom:40px"></div>
@@ -188,7 +200,7 @@ function buildCoaHtml(ctx) {
   </div>
 
   <div style="margin-top:24px;font-size:10px;color:#94a3b8;text-align:center;border-top:1px solid #e2e8f0;padding-top:12px">
-    This report shall not be reproduced without written approval from ${tenant?.name || 'Countrylab'}. 
+    This report shall not be reproduced without written approval from ${tenant?.name || "Countrylab"}. 
     Results relate only to the sample(s) tested. Generated by Countrylab LMS.
   </div>
 </body>

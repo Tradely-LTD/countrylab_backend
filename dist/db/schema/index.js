@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.reagentsRelations = exports.suppliersRelations = exports.resultsRelations = exports.samplesRelations = exports.usersRelations = exports.tenantsRelations = exports.notifications = exports.audit_logs = exports.tickets = exports.invoices = exports.sops = exports.purchase_orders = exports.requisitions = exports.asset_logs = exports.assets = exports.reagents = exports.result_changes = exports.results = exports.sample_requests = exports.samples = exports.test_methods = exports.suppliers = exports.clients = exports.users = exports.tenants = exports.sopStatusEnum = exports.ticketTypeEnum = exports.ticketStatusEnum = exports.requisitionStatusEnum = exports.assetStatusEnum = exports.productTypeEnum = exports.reagentGradeEnum = exports.requestStatusEnum = exports.resultStatusEnum = exports.sampleStatusEnum = exports.userRoleEnum = exports.countrylabSchema = void 0;
+exports.resultTemplateParametersRelations = exports.resultTemplatesRelations = exports.reagentsRelations = exports.suppliersRelations = exports.resultsRelations = exports.samplesRelations = exports.usersRelations = exports.tenantsRelations = exports.notifications = exports.audit_logs = exports.tickets = exports.invoices = exports.sops = exports.purchase_orders = exports.requisitions = exports.asset_logs = exports.assets = exports.reagents = exports.result_changes = exports.results = exports.result_template_parameters = exports.result_templates = exports.sample_requests = exports.samples = exports.test_methods = exports.suppliers = exports.client_interactions = exports.clients = exports.users = exports.tenants = exports.sopStatusEnum = exports.ticketTypeEnum = exports.ticketStatusEnum = exports.requisitionStatusEnum = exports.assetStatusEnum = exports.productTypeEnum = exports.reagentGradeEnum = exports.requestStatusEnum = exports.resultStatusEnum = exports.sampleStatusEnum = exports.userRoleEnum = exports.countrylabSchema = void 0;
 const pg_core_1 = require("drizzle-orm/pg-core");
 const drizzle_orm_1 = require("drizzle-orm");
 // Define the schema
@@ -145,10 +145,33 @@ exports.clients = exports.countrylabSchema.table("clients", {
     contact_person: (0, pg_core_1.varchar)("contact_person", { length: 255 }),
     notes: (0, pg_core_1.text)("notes"),
     is_active: (0, pg_core_1.boolean)("is_active").default(true),
+    client_status: (0, pg_core_1.varchar)("client_status", { length: 20 }).default("active"),
     created_by: (0, pg_core_1.uuid)("created_by").references(() => exports.users.id),
     created_at: (0, pg_core_1.timestamp)("created_at").defaultNow(),
     updated_at: (0, pg_core_1.timestamp)("updated_at").defaultNow(),
 });
+// ─── Client Interactions ──────────────────────────────────────────────────────
+exports.client_interactions = exports.countrylabSchema.table("client_interactions", {
+    id: (0, pg_core_1.uuid)("id").defaultRandom().primaryKey(),
+    tenant_id: (0, pg_core_1.uuid)("tenant_id")
+        .references(() => exports.tenants.id, { onDelete: "cascade" })
+        .notNull(),
+    client_id: (0, pg_core_1.uuid)("client_id")
+        .references(() => exports.clients.id, { onDelete: "cascade" })
+        .notNull(),
+    staff_id: (0, pg_core_1.uuid)("staff_id")
+        .references(() => exports.users.id)
+        .notNull(),
+    type: (0, pg_core_1.varchar)("type", { length: 50 }).notNull(), // Call | Email | Visit | Meeting | Other
+    date: (0, pg_core_1.timestamp)("date").notNull(),
+    notes: (0, pg_core_1.text)("notes"),
+    outcome: (0, pg_core_1.varchar)("outcome", { length: 50 }), // Interested | Not Interested | Follow-up Required | Converted
+    created_at: (0, pg_core_1.timestamp)("created_at").defaultNow(),
+}, (t) => ({
+    tenantIdx: (0, pg_core_1.index)("client_interactions_tenant_idx").on(t.tenant_id),
+    clientIdx: (0, pg_core_1.index)("client_interactions_client_idx").on(t.client_id),
+    staffIdx: (0, pg_core_1.index)("client_interactions_staff_idx").on(t.staff_id),
+}));
 // ─── Suppliers ────────────────────────────────────────────────────────────────
 exports.suppliers = exports.countrylabSchema.table("suppliers", {
     id: (0, pg_core_1.uuid)("id").defaultRandom().primaryKey(),
@@ -298,6 +321,42 @@ exports.sample_requests = exports.countrylabSchema.table("sample_requests", {
     statusIdx: (0, pg_core_1.index)("sample_requests_status_idx").on(t.status),
     numberIdx: (0, pg_core_1.index)("sample_requests_number_idx").on(t.request_number),
 }));
+// ─── Result Templates ─────────────────────────────────────────────────────────
+exports.result_templates = exports.countrylabSchema.table("result_templates", {
+    id: (0, pg_core_1.uuid)("id").defaultRandom().primaryKey(),
+    tenant_id: (0, pg_core_1.uuid)("tenant_id")
+        .references(() => exports.tenants.id, { onDelete: "cascade" })
+        .notNull(),
+    name: (0, pg_core_1.varchar)("name", { length: 255 }).notNull(),
+    nis_standard: (0, pg_core_1.varchar)("nis_standard", { length: 100 }),
+    nis_standard_ref: (0, pg_core_1.varchar)("nis_standard_ref", { length: 100 }),
+    effective_date: (0, pg_core_1.date)("effective_date"),
+    version: (0, pg_core_1.integer)("version").default(1),
+    parent_template_id: (0, pg_core_1.uuid)("parent_template_id").references(() => exports.result_templates.id),
+    is_active: (0, pg_core_1.boolean)("is_active").default(true),
+    created_by: (0, pg_core_1.uuid)("created_by").references(() => exports.users.id),
+    created_at: (0, pg_core_1.timestamp)("created_at").defaultNow(),
+    updated_at: (0, pg_core_1.timestamp)("updated_at").defaultNow(),
+}, (t) => ({
+    tenantIdx: (0, pg_core_1.index)("result_templates_tenant_idx").on(t.tenant_id),
+    activeIdx: (0, pg_core_1.index)("result_templates_active_idx").on(t.tenant_id, t.is_active),
+}));
+exports.result_template_parameters = exports.countrylabSchema.table("result_template_parameters", {
+    id: (0, pg_core_1.uuid)("id").defaultRandom().primaryKey(),
+    template_id: (0, pg_core_1.uuid)("template_id")
+        .references(() => exports.result_templates.id, { onDelete: "cascade" })
+        .notNull(),
+    parameter_name: (0, pg_core_1.varchar)("parameter_name", { length: 255 }).notNull(),
+    nis_limit: (0, pg_core_1.text)("nis_limit"),
+    unit: (0, pg_core_1.varchar)("unit", { length: 50 }),
+    parameter_group: (0, pg_core_1.varchar)("parameter_group", { length: 100 }),
+    sequence_order: (0, pg_core_1.integer)("sequence_order").default(0),
+    data_type: (0, pg_core_1.varchar)("data_type", { length: 20 }).default("numerical"),
+    spec_min: (0, pg_core_1.real)("spec_min"),
+    spec_max: (0, pg_core_1.real)("spec_max"),
+}, (t) => ({
+    templateIdx: (0, pg_core_1.index)("result_template_params_template_idx").on(t.template_id),
+}));
 // ─── Results ──────────────────────────────────────────────────────────────────
 exports.results = exports.countrylabSchema.table("results", {
     id: (0, pg_core_1.uuid)("id").defaultRandom().primaryKey(),
@@ -325,6 +384,8 @@ exports.results = exports.countrylabSchema.table("results", {
     voided_at: (0, pg_core_1.timestamp)("voided_at"),
     void_reason: (0, pg_core_1.text)("void_reason"),
     notes: (0, pg_core_1.text)("notes"),
+    template_id: (0, pg_core_1.uuid)("template_id").references(() => exports.result_templates.id),
+    template_version: (0, pg_core_1.integer)("template_version"),
     created_at: (0, pg_core_1.timestamp)("created_at").defaultNow(),
     updated_at: (0, pg_core_1.timestamp)("updated_at").defaultNow(),
 }, (t) => ({
@@ -494,6 +555,9 @@ exports.invoices = exports.countrylabSchema.table("invoices", {
     line_items: (0, pg_core_1.jsonb)("line_items").default([]),
     // [{description, quantity, unit_price, amount}]
     subtotal: (0, pg_core_1.real)("subtotal").default(0),
+    discount_type: (0, pg_core_1.varchar)("discount_type", { length: 20 }).default("percentage"),
+    discount_value: (0, pg_core_1.real)("discount_value").default(0),
+    discount_amount: (0, pg_core_1.real)("discount_amount").default(0),
     tax_rate: (0, pg_core_1.real)("tax_rate").default(0),
     tax_amount: (0, pg_core_1.real)("tax_amount").default(0),
     total: (0, pg_core_1.real)("total").default(0),
@@ -609,6 +673,10 @@ exports.resultsRelations = (0, drizzle_orm_1.relations)(exports.results, ({ one,
     }),
     analyst: one(exports.users, { fields: [exports.results.analyst_id], references: [exports.users.id] }),
     changes: many(exports.result_changes),
+    template: one(exports.result_templates, {
+        fields: [exports.results.template_id],
+        references: [exports.result_templates.id],
+    }),
 }));
 exports.suppliersRelations = (0, drizzle_orm_1.relations)(exports.suppliers, ({ one, many }) => ({
     tenant: one(exports.tenants, {
@@ -626,6 +694,32 @@ exports.reagentsRelations = (0, drizzle_orm_1.relations)(exports.reagents, ({ on
     supplier: one(exports.suppliers, {
         fields: [exports.reagents.supplier_id],
         references: [exports.suppliers.id],
+    }),
+}));
+exports.resultTemplatesRelations = (0, drizzle_orm_1.relations)(exports.result_templates, ({ one, many }) => ({
+    tenant: one(exports.tenants, {
+        fields: [exports.result_templates.tenant_id],
+        references: [exports.tenants.id],
+    }),
+    createdBy: one(exports.users, {
+        fields: [exports.result_templates.created_by],
+        references: [exports.users.id],
+    }),
+    parentTemplate: one(exports.result_templates, {
+        fields: [exports.result_templates.parent_template_id],
+        references: [exports.result_templates.id],
+        relationName: "templateVersions",
+    }),
+    childTemplates: many(exports.result_templates, {
+        relationName: "templateVersions",
+    }),
+    parameters: many(exports.result_template_parameters),
+    results: many(exports.results),
+}));
+exports.resultTemplateParametersRelations = (0, drizzle_orm_1.relations)(exports.result_template_parameters, ({ one }) => ({
+    template: one(exports.result_templates, {
+        fields: [exports.result_template_parameters.template_id],
+        references: [exports.result_templates.id],
     }),
 }));
 //# sourceMappingURL=index.js.map

@@ -20,10 +20,14 @@ const results_1 = __importDefault(require("./routes/results"));
 const suppliers_1 = __importDefault(require("./routes/suppliers"));
 const settings_1 = __importDefault(require("./routes/settings"));
 const sample_requests_1 = __importDefault(require("./routes/sample-requests"));
+const result_templates_1 = __importDefault(require("./routes/result-templates"));
 const inventory_assets_procurement_1 = require("./routes/inventory-assets-procurement");
 const misc_routes_1 = require("./routes/misc-routes");
 const app = (0, express_1.default)();
 const PORT = parseInt(process.env.PORT || "3001", 10);
+// ─── Trust Reverse Proxy ──────────────────────────────────────────────────────
+// Trust the first proxy (Nginx) for proper IP and protocol handling
+app.set("trust proxy", 1);
 // ─── Security Middleware ──────────────────────────────────────────────────────
 app.use((0, helmet_1.default)());
 app.use((0, cors_1.default)({
@@ -57,14 +61,37 @@ app.use((0, morgan_1.default)(process.env.NODE_ENV === "production" ? "combined"
     stream: { write: (message) => logger_1.logger.info(message.trim()) },
 }));
 // ─── Health Check ─────────────────────────────────────────────────────────────
-app.get("/health", (req, res) => {
-    res.json({
+app.get("/health", async (req, res) => {
+    const result = {
         status: "ok",
         app: "Countrylab LMS API",
         version: "1.0.0",
         schema: process.env.DATABASE_SCHEMA || "countrylab_lms",
         timestamp: new Date().toISOString(),
-    });
+        services: { database: "ok", supabase: "ok" },
+    };
+    // Check DB
+    try {
+        await (0, db_1.checkDbConnection)();
+    }
+    catch {
+        result.status = "degraded";
+        result.services.database = "unreachable";
+    }
+    // Check Supabase reachability
+    try {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 3000);
+        await fetch(`${process.env.SUPABASE_URL}/rest/v1/`, {
+            signal: controller.signal,
+        });
+        clearTimeout(timeout);
+    }
+    catch {
+        result.status = "degraded";
+        result.services.supabase = "unreachable";
+    }
+    res.status(result.status === "ok" ? 200 : 503).json(result);
 });
 // ─── API Routes ───────────────────────────────────────────────────────────────
 const API = "/api/v1";
@@ -83,6 +110,7 @@ app.use(`${API}/audit-logs`, misc_routes_1.auditRouter);
 app.use(`${API}/dashboard`, misc_routes_1.dashboardRouter);
 app.use(`${API}/notifications`, misc_routes_1.notificationsRouter);
 app.use(`${API}/invoices`, misc_routes_1.invoicesRouter);
+app.use(`${API}/result-templates`, result_templates_1.default);
 // Public verification endpoint (no auth)
 app.use(`${API}/results/verify`, results_1.default);
 // ─── Static Files ─────────────────────────────────────────────────────────────
@@ -102,8 +130,8 @@ async function bootstrap() {
     try {
         await (0, db_1.initializeSchema)();
         await (0, db_1.checkDbConnection)();
-        app.listen(PORT, () => {
-            logger_1.logger.info(`🚀 Countrylab LMS API running on port ${PORT}`);
+        app.listen(PORT, "127.0.0.1", () => {
+            logger_1.logger.info(`🚀 Countrylab LMS API running on 127.0.0.1:${PORT}`);
             logger_1.logger.info(`📋 Environment: ${process.env.NODE_ENV || "development"}`);
             logger_1.logger.info(`🗄️  Database Schema: ${process.env.DATABASE_SCHEMA || "countrylab_lms"}`);
         });

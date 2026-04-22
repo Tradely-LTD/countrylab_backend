@@ -42,8 +42,8 @@ const schema_1 = require("../db/schema");
 const auth_1 = require("../middleware/auth");
 const audit_1 = require("../middleware/audit");
 const errorHandler_1 = require("../middleware/errorHandler");
+const invoiceComputation_1 = require("../utils/invoiceComputation");
 const supabase_js_1 = require("@supabase/supabase-js");
-const drizzle_orm_2 = require("drizzle-orm");
 // ════════════════════════════════════════════════════════════════
 // CLIENTS ROUTER
 // ════════════════════════════════════════════════════════════════
@@ -58,16 +58,130 @@ const clientSchema = zod_1.z.object({
     notes: zod_1.z.string().optional(),
 });
 exports.clientsRouter.get("/", auth_1.authenticate, async (req, res) => {
-    const { search } = req.query;
+    const { search, created_by, from, to, status } = req.query;
     const conditions = [(0, drizzle_orm_1.eq)(schema_1.clients.tenant_id, req.tenantId)];
     if (search)
         conditions.push((0, drizzle_orm_1.sql) `(${schema_1.clients.name} ILIKE ${"%" + search + "%"} OR ${schema_1.clients.company} ILIKE ${"%" + search + "%"})`);
+    if (created_by)
+        conditions.push((0, drizzle_orm_1.eq)(schema_1.clients.created_by, created_by));
+    if (from)
+        conditions.push((0, drizzle_orm_1.gte)(schema_1.clients.created_at, new Date(from)));
+    if (to) {
+        // inclusive: set time to end of day
+        const toDate = new Date(to);
+        toDate.setHours(23, 59, 59, 999);
+        conditions.push((0, drizzle_orm_1.lte)(schema_1.clients.created_at, toDate));
+    }
+    if (status && (status === "lead" || status === "active"))
+        conditions.push((0, drizzle_orm_1.eq)(schema_1.clients.client_status, status));
+    const whereClause = (0, drizzle_orm_1.and)(...conditions);
+    // Alias users table for the join
+    const creatorAlias = schema_1.users;
+    const [list, totalResult, leadsResult, interactionsResult] = await Promise.all([
+        db_1.db
+            .select({
+            id: schema_1.clients.id,
+            tenant_id: schema_1.clients.tenant_id,
+            name: schema_1.clients.name,
+            company: schema_1.clients.company,
+            email: schema_1.clients.email,
+            phone: schema_1.clients.phone,
+            address: schema_1.clients.address,
+            city: schema_1.clients.city,
+            state: schema_1.clients.state,
+            postal_code: schema_1.clients.postal_code,
+            country: schema_1.clients.country,
+            tax_id: schema_1.clients.tax_id,
+            website: schema_1.clients.website,
+            contact_person: schema_1.clients.contact_person,
+            notes: schema_1.clients.notes,
+            is_active: schema_1.clients.is_active,
+            client_status: schema_1.clients.client_status,
+            created_by: schema_1.clients.created_by,
+            created_at: schema_1.clients.created_at,
+            updated_at: schema_1.clients.updated_at,
+            creator_name: creatorAlias.full_name,
+        })
+            .from(schema_1.clients)
+            .leftJoin(creatorAlias, (0, drizzle_orm_1.eq)(schema_1.clients.created_by, creatorAlias.id))
+            .where(whereClause)
+            .orderBy(schema_1.clients.name),
+        db_1.db
+            .select({ count: (0, drizzle_orm_1.sql) `count(*)::int` })
+            .from(schema_1.clients)
+            .where(whereClause),
+        db_1.db
+            .select({ count: (0, drizzle_orm_1.sql) `count(*)::int` })
+            .from(schema_1.clients)
+            .where((0, drizzle_orm_1.and)(whereClause, (0, drizzle_orm_1.eq)(schema_1.clients.client_status, "lead"))),
+        db_1.db
+            .select({ count: (0, drizzle_orm_1.sql) `count(*)::int` })
+            .from(schema_1.client_interactions)
+            .where((0, drizzle_orm_1.and)((0, drizzle_orm_1.eq)(schema_1.client_interactions.tenant_id, req.tenantId), 
+        // scope interactions to clients matching the same filters
+        created_by
+            ? (0, drizzle_orm_1.sql) `${schema_1.client_interactions.client_id} IN (SELECT id FROM countrylab_lms.clients WHERE tenant_id = ${req.tenantId} AND created_by = ${created_by})`
+            : (0, drizzle_orm_1.sql) `${schema_1.client_interactions.client_id} IN (SELECT id FROM countrylab_lms.clients WHERE tenant_id = ${req.tenantId})`)),
+    ]);
+    res.json({
+        data: list,
+        summary: {
+            total: totalResult[0]?.count ?? 0,
+            leads: leadsResult[0]?.count ?? 0,
+            interactions: interactionsResult[0]?.count ?? 0,
+        },
+    });
+});
+// GET /clients/export — must be registered BEFORE /:id to avoid path conflict
+exports.clientsRouter.get("/export", auth_1.authenticate, async (req, res) => {
+    const { created_by, from, to, status } = req.query;
+    const conditions = [(0, drizzle_orm_1.eq)(schema_1.clients.tenant_id, req.tenantId)];
+    if (created_by)
+        conditions.push((0, drizzle_orm_1.eq)(schema_1.clients.created_by, created_by));
+    if (from)
+        conditions.push((0, drizzle_orm_1.gte)(schema_1.clients.created_at, new Date(from)));
+    if (to) {
+        const toDate = new Date(to);
+        toDate.setHours(23, 59, 59, 999);
+        conditions.push((0, drizzle_orm_1.lte)(schema_1.clients.created_at, toDate));
+    }
+    if (status && (status === "lead" || status === "active"))
+        conditions.push((0, drizzle_orm_1.eq)(schema_1.clients.client_status, status));
     const list = await db_1.db
-        .select()
+        .select({
+        name: schema_1.clients.name,
+        company: schema_1.clients.company,
+        contact_person: schema_1.clients.contact_person,
+        email: schema_1.clients.email,
+        phone: schema_1.clients.phone,
+        created_at: schema_1.clients.created_at,
+        creator_name: schema_1.users.full_name,
+    })
         .from(schema_1.clients)
+        .leftJoin(schema_1.users, (0, drizzle_orm_1.eq)(schema_1.clients.created_by, schema_1.users.id))
         .where((0, drizzle_orm_1.and)(...conditions))
         .orderBy(schema_1.clients.name);
-    res.json({ data: list });
+    if (list.length === 0) {
+        res.status(400).json({ message: "No data to export" });
+        return;
+    }
+    const csvEscape = (v) => '"' + String(v ?? "").replace(/"/g, '""') + '"';
+    const header = "Client Name,Company,Contact Person,Email,Phone,Created By,Created Date";
+    const rows = list.map((r) => [
+        csvEscape(r.name),
+        csvEscape(r.company),
+        csvEscape(r.contact_person),
+        csvEscape(r.email),
+        csvEscape(r.phone),
+        csvEscape(r.creator_name),
+        csvEscape(r.created_at
+            ? new Date(r.created_at).toISOString().split("T")[0]
+            : ""),
+    ].join(","));
+    const csv = [header, ...rows].join("\r\n");
+    res.setHeader("Content-Type", "text/csv");
+    res.setHeader("Content-Disposition", 'attachment; filename="clients-export.csv"');
+    res.send(csv);
 });
 exports.clientsRouter.get("/:id", auth_1.authenticate, async (req, res) => {
     const [client] = await db_1.db
@@ -159,6 +273,121 @@ exports.clientsRouter.get("/:id/history", auth_1.authenticate, async (req, res) 
             samples: clientSamples,
         },
     });
+});
+// PATCH /clients/:id/status — update lead/active status
+exports.clientsRouter.patch("/:id/status", auth_1.authenticate, (0, auth_1.requireRole)("super_admin", "md", "quality_manager", "business_development", "finance"), async (req, res) => {
+    const { status } = zod_1.z
+        .object({ status: zod_1.z.enum(["lead", "active"]) })
+        .parse(req.body);
+    const [updated] = await db_1.db
+        .update(schema_1.clients)
+        .set({ client_status: status, updated_at: new Date() })
+        .where((0, drizzle_orm_1.and)((0, drizzle_orm_1.eq)(schema_1.clients.id, req.params.id), (0, drizzle_orm_1.eq)(schema_1.clients.tenant_id, req.tenantId)))
+        .returning();
+    if (!updated)
+        throw new errorHandler_1.AppError(404, "Client not found");
+    await (0, audit_1.createAuditLog)({
+        tenant_id: req.tenantId,
+        user_id: req.user.id,
+        action: "UPDATE",
+        table_name: "clients",
+        record_id: updated.id,
+        metadata: { action: "status_change", status },
+    });
+    res.json({ data: updated });
+});
+// POST /clients/:id/interactions — log a CRM interaction
+exports.clientsRouter.post("/:id/interactions", auth_1.authenticate, (0, auth_1.requireRole)("super_admin", "md", "quality_manager", "business_development", "finance"), async (req, res) => {
+    const body = zod_1.z
+        .object({
+        type: zod_1.z.enum(["Call", "Email", "Visit", "Meeting", "Other"]),
+        date: zod_1.z.string(),
+        notes: zod_1.z.string().optional(),
+        outcome: zod_1.z
+            .enum([
+            "Interested",
+            "Not Interested",
+            "Follow-up Required",
+            "Converted",
+        ])
+            .optional(),
+    })
+        .parse(req.body);
+    // Verify client belongs to tenant
+    const [client] = await db_1.db
+        .select({ id: schema_1.clients.id, client_status: schema_1.clients.client_status })
+        .from(schema_1.clients)
+        .where((0, drizzle_orm_1.and)((0, drizzle_orm_1.eq)(schema_1.clients.id, req.params.id), (0, drizzle_orm_1.eq)(schema_1.clients.tenant_id, req.tenantId)))
+        .limit(1);
+    if (!client)
+        throw new errorHandler_1.AppError(404, "Client not found");
+    const [interaction] = await db_1.db
+        .insert(schema_1.client_interactions)
+        .values({
+        tenant_id: req.tenantId,
+        client_id: req.params.id,
+        staff_id: req.user.id,
+        type: body.type,
+        date: new Date(body.date),
+        notes: body.notes,
+        outcome: body.outcome,
+    })
+        .returning();
+    // If outcome is Converted, promote client to active
+    if (body.outcome === "Converted") {
+        await db_1.db
+            .update(schema_1.clients)
+            .set({ client_status: "active", updated_at: new Date() })
+            .where((0, drizzle_orm_1.eq)(schema_1.clients.id, req.params.id));
+    }
+    // Return interaction with staff name
+    const [result] = await db_1.db
+        .select({
+        id: schema_1.client_interactions.id,
+        tenant_id: schema_1.client_interactions.tenant_id,
+        client_id: schema_1.client_interactions.client_id,
+        staff_id: schema_1.client_interactions.staff_id,
+        type: schema_1.client_interactions.type,
+        date: schema_1.client_interactions.date,
+        notes: schema_1.client_interactions.notes,
+        outcome: schema_1.client_interactions.outcome,
+        created_at: schema_1.client_interactions.created_at,
+        staff_name: schema_1.users.full_name,
+    })
+        .from(schema_1.client_interactions)
+        .leftJoin(schema_1.users, (0, drizzle_orm_1.eq)(schema_1.client_interactions.staff_id, schema_1.users.id))
+        .where((0, drizzle_orm_1.eq)(schema_1.client_interactions.id, interaction.id))
+        .limit(1);
+    res.status(201).json({ data: result });
+});
+// GET /clients/:id/interactions — list interactions for a client
+exports.clientsRouter.get("/:id/interactions", auth_1.authenticate, async (req, res) => {
+    const conditions = [
+        (0, drizzle_orm_1.eq)(schema_1.client_interactions.client_id, req.params.id),
+        (0, drizzle_orm_1.eq)(schema_1.client_interactions.tenant_id, req.tenantId),
+    ];
+    // Staff can only see their own interactions
+    if (req.user.role === "staff") {
+        conditions.push((0, drizzle_orm_1.eq)(schema_1.client_interactions.staff_id, req.user.id));
+    }
+    const list = await db_1.db
+        .select({
+        id: schema_1.client_interactions.id,
+        tenant_id: schema_1.client_interactions.tenant_id,
+        client_id: schema_1.client_interactions.client_id,
+        staff_id: schema_1.client_interactions.staff_id,
+        type: schema_1.client_interactions.type,
+        date: schema_1.client_interactions.date,
+        notes: schema_1.client_interactions.notes,
+        outcome: schema_1.client_interactions.outcome,
+        created_at: schema_1.client_interactions.created_at,
+        staff_name: schema_1.users.full_name,
+    })
+        .from(schema_1.client_interactions)
+        .leftJoin(schema_1.users, (0, drizzle_orm_1.eq)(schema_1.client_interactions.staff_id, schema_1.users.id))
+        .where((0, drizzle_orm_1.and)(...conditions))
+        .orderBy((0, drizzle_orm_1.desc)(schema_1.client_interactions.date));
+    res.json({ data: list });
 });
 // ════════════════════════════════════════════════════════════════
 // USERS / TEAM ROUTER
@@ -362,18 +591,18 @@ exports.dashboardRouter.get("/widgets", auth_1.authenticate, async (req, res) =>
         db_1.db
             .select({ count: (0, drizzle_orm_1.sql) `count(*)::int` })
             .from(schema_1.reagents)
-            .where((0, drizzle_orm_1.and)((0, drizzle_orm_1.eq)(schema_1.reagents.tenant_id, tenantId), (0, drizzle_orm_2.lte)(schema_1.reagents.expiry_date, thirtyDays), (0, drizzle_orm_1.sql) `${schema_1.reagents.expiry_date} > ${now}`)),
+            .where((0, drizzle_orm_1.and)((0, drizzle_orm_1.eq)(schema_1.reagents.tenant_id, tenantId), (0, drizzle_orm_1.lte)(schema_1.reagents.expiry_date, thirtyDays), (0, drizzle_orm_1.sql) `${schema_1.reagents.expiry_date} > ${now}`)),
         db_1.db
             .select({ count: (0, drizzle_orm_1.sql) `count(*)::int` })
             .from(schema_1.assets)
-            .where((0, drizzle_orm_1.and)((0, drizzle_orm_1.eq)(schema_1.assets.tenant_id, tenantId), (0, drizzle_orm_2.lte)(schema_1.assets.next_calibration_date, thirtyDays))),
+            .where((0, drizzle_orm_1.and)((0, drizzle_orm_1.eq)(schema_1.assets.tenant_id, tenantId), (0, drizzle_orm_1.lte)(schema_1.assets.next_calibration_date, thirtyDays))),
         ["md", "super_admin", "finance"].includes(role)
             ? db_1.db
                 .select({
                 total: (0, drizzle_orm_1.sql) `COALESCE(SUM(${schema_1.invoices.total}), 0)::float`,
             })
                 .from(schema_1.invoices)
-                .where((0, drizzle_orm_1.and)((0, drizzle_orm_1.eq)(schema_1.invoices.tenant_id, tenantId), (0, drizzle_orm_1.gte)(schema_1.invoices.created_at, startDate), (0, drizzle_orm_2.lte)(schema_1.invoices.created_at, endDate), (0, drizzle_orm_1.eq)(schema_1.invoices.status, "paid")))
+                .where((0, drizzle_orm_1.and)((0, drizzle_orm_1.eq)(schema_1.invoices.tenant_id, tenantId), (0, drizzle_orm_1.gte)(schema_1.invoices.created_at, startDate), (0, drizzle_orm_1.lte)(schema_1.invoices.created_at, endDate), (0, drizzle_orm_1.eq)(schema_1.invoices.status, "paid")))
             : [{ total: 0 }],
         db_1.db
             .select({ count: (0, drizzle_orm_1.sql) `count(*)::int` })
@@ -504,6 +733,9 @@ exports.invoicesRouter.get("/:id", auth_1.authenticate, (0, auth_1.requireRole)(
         invoice_number: schema_1.invoices.invoice_number,
         line_items: schema_1.invoices.line_items,
         subtotal: schema_1.invoices.subtotal,
+        discount_type: schema_1.invoices.discount_type,
+        discount_value: schema_1.invoices.discount_value,
+        discount_amount: schema_1.invoices.discount_amount,
         tax_rate: schema_1.invoices.tax_rate,
         tax_amount: schema_1.invoices.tax_amount,
         total: schema_1.invoices.total,
@@ -559,14 +791,27 @@ exports.invoicesRouter.post("/", auth_1.authenticate, (0, auth_1.requireRole)("s
             amount: zod_1.z.number(),
         })),
         tax_rate: zod_1.z.number().default(7.5), // Default VAT in Nigeria
+        discount_type: zod_1.z.enum(["percentage", "fixed"]).default("percentage"),
+        discount_value: zod_1.z.number().min(0).default(0),
         due_date: zod_1.z.string().optional().or(zod_1.z.literal("")),
         notes: zod_1.z.string().optional(),
         currency: zod_1.z.string().default("NGN"),
     })
+        .superRefine((data, ctx) => {
+        if (data.discount_type === "percentage" && data.discount_value > 100) {
+            ctx.addIssue({
+                code: zod_1.z.ZodIssueCode.too_big,
+                maximum: 100,
+                type: "number",
+                inclusive: true,
+                message: "Percentage discount must be between 0 and 100",
+                path: ["discount_value"],
+            });
+        }
+    })
         .parse(req.body);
     const subtotal = body.line_items.reduce((sum, item) => sum + item.amount, 0);
-    const taxAmount = subtotal * (body.tax_rate / 100);
-    const total = subtotal + taxAmount;
+    const { discountAmount, taxAmount, total } = (0, invoiceComputation_1.computeInvoiceTotals)(subtotal, body.tax_rate, body.discount_type, body.discount_value);
     // Generate invoice number with date prefix
     const now = new Date();
     const datePrefix = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}`;
@@ -584,6 +829,9 @@ exports.invoicesRouter.post("/", auth_1.authenticate, (0, auth_1.requireRole)("s
         result_id: body.result_id && body.result_id !== "" ? body.result_id : undefined,
         line_items: body.line_items,
         subtotal,
+        discount_type: body.discount_type,
+        discount_value: body.discount_value,
+        discount_amount: discountAmount,
         tax_rate: body.tax_rate,
         tax_amount: taxAmount,
         total,
@@ -628,9 +876,25 @@ exports.invoicesRouter.put("/:id", auth_1.authenticate, (0, auth_1.requireRole)(
         }))
             .optional(),
         tax_rate: zod_1.z.number().optional(),
+        discount_type: zod_1.z.enum(["percentage", "fixed"]).optional(),
+        discount_value: zod_1.z.number().min(0).optional(),
         due_date: zod_1.z.string().datetime().optional(),
         notes: zod_1.z.string().optional(),
         status: zod_1.z.enum(["unpaid", "paid", "partial", "voided"]).optional(),
+    })
+        .superRefine((data, ctx) => {
+        if (data.discount_type === "percentage" &&
+            data.discount_value !== undefined &&
+            data.discount_value > 100) {
+            ctx.addIssue({
+                code: zod_1.z.ZodIssueCode.too_big,
+                maximum: 100,
+                type: "number",
+                inclusive: true,
+                message: "Percentage discount must be between 0 and 100",
+                path: ["discount_value"],
+            });
+        }
     })
         .parse(req.body);
     const [existing] = await db_1.db
@@ -644,15 +908,25 @@ exports.invoicesRouter.put("/:id", auth_1.authenticate, (0, auth_1.requireRole)(
         throw new errorHandler_1.AppError(400, "Cannot edit a paid invoice");
     }
     let updateData = { updated_at: new Date() };
-    if (body.line_items) {
-        const subtotal = body.line_items.reduce((sum, item) => sum + item.amount, 0);
+    if (body.line_items ||
+        body.discount_type !== undefined ||
+        body.discount_value !== undefined ||
+        body.tax_rate !== undefined) {
+        const lineItems = body.line_items ?? existing.line_items;
+        const subtotal = lineItems.reduce((sum, item) => sum + item.amount, 0);
         const taxRate = body.tax_rate ?? existing.tax_rate ?? 0;
-        const taxAmount = subtotal * (taxRate / 100);
-        const total = subtotal + taxAmount;
+        const discountType = (body.discount_type ??
+            existing.discount_type ??
+            "percentage");
+        const discountValue = body.discount_value ?? existing.discount_value ?? 0;
+        const { discountAmount, taxAmount, total } = (0, invoiceComputation_1.computeInvoiceTotals)(subtotal, taxRate, discountType, discountValue);
         updateData = {
             ...updateData,
-            line_items: body.line_items,
+            ...(body.line_items ? { line_items: body.line_items } : {}),
             subtotal,
+            discount_type: discountType,
+            discount_value: discountValue,
+            discount_amount: discountAmount,
             tax_rate: taxRate,
             tax_amount: taxAmount,
             total,
