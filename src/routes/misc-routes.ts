@@ -29,6 +29,7 @@ import { computeInvoiceTotals } from "../utils/invoiceComputation";
 import { createClient as supabaseAdmin } from "@supabase/supabase-js";
 import bcrypt from "bcryptjs";
 import { lt } from "drizzle-orm";
+import { sendPasswordResetEmail } from "../services/emailService";
 
 // ════════════════════════════════════════════════════════════════
 // CLIENTS ROUTER
@@ -243,6 +244,7 @@ clientsRouter.post(
     "quality_manager",
     "business_development",
     "finance",
+    "marketer",
   ),
   async (req: Request, res: Response) => {
     const body = clientSchema.parse(req.body);
@@ -604,6 +606,7 @@ usersRouter.post(
           "customer",
           "finance",
           "business_development",
+          "marketer",
         ]),
         department: z.string().optional(),
         phone: z.string().optional(),
@@ -621,6 +624,17 @@ usersRouter.post(
     if (error)
       throw new AppError(400, `Failed to create auth user: ${error.message}`);
 
+    // Auto-generate unique referral code for marketers (8-char alphanumeric)
+    let referralCode: string | undefined;
+    if (body.role === "marketer") {
+      const chars = "abcdefghijklmnopqrstuvwxyz0123456789";
+      let code = "";
+      for (let i = 0; i < 8; i++) {
+        code += chars[Math.floor(Math.random() * chars.length)];
+      }
+      referralCode = code;
+    }
+
     const [newUser] = await db
       .insert(users)
       .values({
@@ -632,6 +646,7 @@ usersRouter.post(
         department: body.department,
         phone: body.phone,
         requires_2fa: ["md", "super_admin", "finance"].includes(body.role),
+        referral_code: referralCode,
       })
       .returning();
 
@@ -679,6 +694,45 @@ usersRouter.patch(
       record_id: updated.id,
     });
     res.json({ data: updated });
+  },
+);
+
+usersRouter.post(
+  "/:id/reset-password",
+  authenticate,
+  requireRole(...ADMIN_ROLES),
+  async (req: Request, res: Response) => {
+    const [user] = await db
+      .select({ id: users.id, email: users.email, full_name: users.full_name })
+      .from(users)
+      .where(
+        and(eq(users.id, req.params.id), eq(users.tenant_id, req.tenantId!)),
+      )
+      .limit(1);
+
+    if (!user) throw new AppError(404, "User not found");
+
+    // Generate a secure recovery link via Supabase admin (does not send email)
+    const { data: linkData, error } =
+      await adminSupabase.auth.admin.generateLink({
+        type: "recovery",
+        email: user.email,
+        options: {
+          redirectTo: `${process.env.FRONTEND_URL || ""}/reset-password`,
+        },
+      });
+
+    if (error || !linkData?.properties?.action_link)
+      throw new AppError(400, `Failed to generate reset link: ${error?.message}`);
+
+    // Send the link via the project's own SMTP (branded email)
+    await sendPasswordResetEmail({
+      recipientEmail: user.email,
+      recipientName: user.full_name,
+      resetLink: linkData.properties.action_link,
+    });
+
+    res.json({ message: "Password reset email sent." });
   },
 );
 

@@ -119,6 +119,7 @@ export const STAFF_ROLES = [
   "inventory_manager",
   "finance",
   "business_development",
+  "marketer",
 ];
 export const LAB_ROLES = [
   "super_admin",

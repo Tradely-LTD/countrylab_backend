@@ -287,6 +287,74 @@ export async function sendRequestConfirmation(data: RequestConfirmationData) {
   }
 }
 
+export async function sendPasswordResetEmail(data: {
+  recipientEmail: string;
+  recipientName: string;
+  resetLink: string;
+}) {
+  try {
+    const transporter = getTransporter();
+    if (!transporter) {
+      logger.warn("Email transporter not available, skipping password reset email");
+      return false;
+    }
+
+    const { recipientEmail, recipientName, resetLink } = data;
+
+    await transporter.sendMail({
+      from: `${FROM_NAME} <${FROM_EMAIL}>`,
+      to: recipientEmail,
+      subject: "Reset Your Countrylab Password",
+      html: `
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <style>
+            body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+            .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+            .header { background: #1e40af; color: white; padding: 30px; text-align: center; border-radius: 10px 10px 0 0; }
+            .content { background: #f9fafb; padding: 30px; border-radius: 0 0 10px 10px; }
+            .button { display: inline-block; background: #1e40af; color: white !important; padding: 14px 32px; text-decoration: none; border-radius: 8px; font-weight: bold; font-size: 15px; margin: 20px 0; }
+            .footer { text-align: center; padding: 20px; color: #6b7280; font-size: 13px; }
+            .notice { background: #fef3c7; border-left: 4px solid #f59e0b; padding: 12px 16px; border-radius: 4px; font-size: 13px; margin-top: 20px; }
+          </style>
+        </head>
+        <body>
+          <div class="container">
+            <div class="header">
+              <h2 style="margin:0;">Password Reset Request</h2>
+              <p style="margin:6px 0 0; opacity:0.85;">Countrylab LMS</p>
+            </div>
+            <div class="content">
+              <p>Hello <strong>${recipientName}</strong>,</p>
+              <p>An administrator has requested a password reset for your account. Click the button below to set a new password:</p>
+              <div style="text-align:center;">
+                <a href="${resetLink}" class="button">Reset My Password</a>
+              </div>
+              <p style="font-size:13px;color:#6b7280;">Or copy and paste this link into your browser:</p>
+              <p style="font-size:12px;word-break:break-all;color:#374151;">${resetLink}</p>
+              <div class="notice">
+                <strong>Note:</strong> This link expires in 24 hours. If you did not expect this email, please contact your administrator.
+              </div>
+            </div>
+            <div class="footer">
+              <p><strong>Countrylab Laboratory</strong></p>
+              <p>This is an automated message — please do not reply.</p>
+            </div>
+          </div>
+        </body>
+        </html>
+      `,
+    });
+
+    logger.info(`Password reset email sent to ${recipientEmail}`);
+    return true;
+  } catch (error) {
+    logger.error("Failed to send password reset email:", error);
+    return false;
+  }
+}
+
 export async function sendRequestApprovalEmail(data: {
   requestNumber: string;
   clientName: string;

@@ -31,6 +31,7 @@ export const userRoleEnum = countrylabSchema.enum("user_role", [
   "customer",
   "finance",
   "business_development",
+  "marketer",
 ]);
 
 export const sampleStatusEnum = countrylabSchema.enum("sample_status", [
@@ -153,6 +154,7 @@ export const users = countrylabSchema.table(
     avatar_url: text("avatar_url"),
     is_active: boolean("is_active").default(true),
     requires_2fa: boolean("requires_2fa").default(false),
+    referral_code: varchar("referral_code", { length: 12 }).unique(),
     last_login_at: timestamp("last_login_at"),
     created_at: timestamp("created_at").defaultNow(),
     updated_at: timestamp("updated_at").defaultNow(),
@@ -744,6 +746,42 @@ export const notifications = countrylabSchema.table("notifications", {
   is_read: boolean("is_read").default(false),
   created_at: timestamp("created_at").defaultNow(),
 });
+
+// ─── Leads (Marketer Attribution) ────────────────────────────────────────────
+
+export const leads = countrylabSchema.table(
+  "leads",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    tenant_id: uuid("tenant_id")
+      .references(() => tenants.id, { onDelete: "cascade" })
+      .notNull(),
+    marketer_id: uuid("marketer_id")
+      .references(() => users.id)
+      .notNull(),
+    referral_code: varchar("referral_code", { length: 12 }),
+    // Prospect info
+    name: varchar("name", { length: 255 }).notNull(),
+    company: varchar("company", { length: 255 }),
+    phone: varchar("phone", { length: 50 }).notNull(),
+    email: varchar("email", { length: 255 }),
+    city: varchar("city", { length: 100 }),
+    state: varchar("state", { length: 100 }),
+    notes: text("notes"),
+    // Pipeline: new | contacted | interested | sample_submitted | converted | lost
+    status: varchar("status", { length: 30 }).default("new").notNull(),
+    // Conversion
+    converted_client_id: uuid("converted_client_id").references(() => clients.id),
+    converted_at: timestamp("converted_at"),
+    created_at: timestamp("created_at").defaultNow(),
+    updated_at: timestamp("updated_at").defaultNow(),
+  },
+  (t) => ({
+    tenantIdx: index("leads_tenant_idx").on(t.tenant_id),
+    marketerIdx: index("leads_marketer_idx").on(t.marketer_id),
+    statusIdx: index("leads_status_idx").on(t.status),
+  }),
+);
 
 // ─── Relations ────────────────────────────────────────────────────────────────
 

@@ -18,6 +18,7 @@ import suppliersRouter from "./routes/suppliers";
 import settingsRouter from "./routes/settings";
 import sampleRequestsRouter from "./routes/sample-requests";
 import resultTemplatesRouter from "./routes/result-templates";
+import marketersRouter from "./routes/marketers";
 import {
   inventoryRouter,
   assetsRouter,
@@ -134,6 +135,7 @@ app.use(`${API}/dashboard`, dashboardRouter);
 app.use(`${API}/notifications`, notificationsRouter);
 app.use(`${API}/invoices`, invoicesRouter);
 app.use(`${API}/result-templates`, resultTemplatesRouter);
+app.use(`${API}/marketers`, marketersRouter);
 
 // Public verification endpoint (no auth)
 app.use(`${API}/results/verify`, resultsRouter);
