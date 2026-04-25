@@ -7,40 +7,22 @@ import { authenticate, requireRole, ADMIN_ROLES } from "../middleware/auth";
 import { AppError } from "../middleware/errorHandler";
 import multer from "multer";
 import path from "path";
-import fs from "fs";
+import { createClient } from "@supabase/supabase-js";
 
 const router = Router();
 
-// ─── File Upload Configuration ────────────────────────────────────────────────
+// ─── Supabase Storage ─────────────────────────────────────────────────────────
 
-const UPLOAD_DIR = path.join(process.cwd(), "uploads", "assets");
+const supabase = createClient(
+  process.env.SUPABASE_URL!,
+  process.env.SUPABASE_SERVICE_ROLE_KEY!,
+);
+const BUCKET = process.env.SUPABASE_STORAGE_BUCKET || "countrylab-files";
 
-// Ensure upload directory exists
-if (!fs.existsSync(UPLOAD_DIR)) {
-  fs.mkdirSync(UPLOAD_DIR, { recursive: true });
-}
-
-const storage = multer.diskStorage({
-  destination: (req: any, file, cb) => {
-    // tenantId is set by authenticate middleware which runs before multer
-    const tenantId = req.tenantId || req.user?.tenant_id;
-    if (!tenantId) {
-      return cb(new Error("Tenant ID not found"), "");
-    }
-    const tenantDir = path.join(UPLOAD_DIR, tenantId);
-    if (!fs.existsSync(tenantDir)) {
-      fs.mkdirSync(tenantDir, { recursive: true });
-    }
-    cb(null, tenantDir);
-  },
-  filename: (req, file, cb) => {
-    const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
-    cb(null, `logo-${uniqueSuffix}${path.extname(file.originalname)}`);
-  },
-});
+// ─── File Upload Configuration (memory — no disk writes) ──────────────────────
 
 const upload = multer({
-  storage,
+  storage: multer.memoryStorage(),
   limits: { fileSize: 5 * 1024 * 1024 }, // 5MB
   fileFilter: (req, file, cb) => {
     const allowedTypes = /jpeg|jpg|png|svg/;
@@ -73,6 +55,18 @@ const handleMulterError = (
   }
   next();
 };
+
+// Helper: extract storage path from a Supabase public URL
+function storagePathFromUrl(url: string): string | null {
+  try {
+    const marker = `/object/public/${BUCKET}/`;
+    const idx = url.indexOf(marker);
+    if (idx === -1) return null;
+    return url.slice(idx + marker.length);
+  } catch {
+    return null;
+  }
+}
 
 // ─── GET Organization Settings ────────────────────────────────────────────────
 
@@ -178,9 +172,7 @@ router.post(
   requireRole(...ADMIN_ROLES),
   (req, res, next) => {
     upload.single("logo")(req, res, (err) => {
-      if (err) {
-        return handleMulterError(err, req, res, next);
-      }
+      if (err) return handleMulterError(err, req, res, next);
       next();
     });
   },
@@ -189,56 +181,59 @@ router.post(
       throw new AppError(400, "No file uploaded");
     }
 
-    const logoUrl = `/uploads/assets/${req.tenantId}/${req.file.filename}`;
+    const ext = path.extname(req.file.originalname).toLowerCase();
+    const filename = `logo-${Date.now()}-${Math.round(Math.random() * 1e9)}${ext}`;
+    const storagePath = `logos/${req.tenantId}/${filename}`;
 
-    // Get current tenant to delete old logo if exists
+    // Delete old logo from Supabase Storage if one exists
     const [currentTenant] = await db
-      .select()
+      .select({ logo_url: tenants.logo_url })
       .from(tenants)
       .where(eq(tenants.id, req.tenantId!))
       .limit(1);
 
-    // Delete old logo file if exists
     if (currentTenant?.logo_url) {
-      const oldLogoPath = path.join(process.cwd(), currentTenant.logo_url);
-      if (fs.existsSync(oldLogoPath)) {
-        try {
-          fs.unlinkSync(oldLogoPath);
-        } catch (error) {
-          console.error("Failed to delete old logo:", error);
-        }
+      const oldPath = storagePathFromUrl(currentTenant.logo_url);
+      if (oldPath) {
+        await supabase.storage.from(BUCKET).remove([oldPath]);
       }
     }
 
-    // If tenant doesn't exist yet, create a minimal record
-    if (!currentTenant) {
-      const [created] = await db
-        .insert(tenants)
-        .values({
-          id: req.tenantId!,
-          name: "New Organization", // Placeholder name
-          slug: `tenant-${req.tenantId!.slice(0, 8)}`, // Temporary slug
-          logo_url: logoUrl,
-        })
-        .returning();
-
-      return res.json({
-        data: { logo_url: logoUrl },
-        message: "Logo uploaded successfully",
+    // Upload new logo to Supabase Storage
+    const { error: uploadError } = await supabase.storage
+      .from(BUCKET)
+      .upload(storagePath, req.file.buffer, {
+        contentType: req.file.mimetype,
+        upsert: true,
       });
+
+    if (uploadError) {
+      throw new AppError(500, `Storage upload failed: ${uploadError.message}`);
     }
 
-    // Update existing tenant with new logo URL
-    const [updated] = await db
-      .update(tenants)
-      .set({ logo_url: logoUrl, updated_at: new Date() })
-      .where(eq(tenants.id, req.tenantId!))
-      .returning();
+    // Get the permanent public URL
+    const { data: urlData } = supabase.storage
+      .from(BUCKET)
+      .getPublicUrl(storagePath);
 
-    res.json({
-      data: { logo_url: logoUrl },
-      message: "Logo uploaded successfully",
-    });
+    const logoUrl = urlData.publicUrl;
+
+    // Upsert tenant record with new logo URL
+    if (!currentTenant) {
+      await db.insert(tenants).values({
+        id: req.tenantId!,
+        name: "New Organization",
+        slug: `tenant-${req.tenantId!.slice(0, 8)}`,
+        logo_url: logoUrl,
+      });
+    } else {
+      await db
+        .update(tenants)
+        .set({ logo_url: logoUrl, updated_at: new Date() })
+        .where(eq(tenants.id, req.tenantId!));
+    }
+
+    res.json({ data: { logo_url: logoUrl }, message: "Logo uploaded successfully" });
   },
 );
 
@@ -250,35 +245,26 @@ router.delete(
   requireRole(...ADMIN_ROLES),
   async (req: Request, res: Response) => {
     const [currentTenant] = await db
-      .select()
+      .select({ logo_url: tenants.logo_url })
       .from(tenants)
       .where(eq(tenants.id, req.tenantId!))
       .limit(1);
 
-    // If tenant doesn't exist, nothing to delete
     if (!currentTenant) {
       return res.json({ message: "No logo to delete" });
     }
 
-    // Delete logo file if exists
     if (currentTenant.logo_url) {
-      const logoPath = path.join(process.cwd(), currentTenant.logo_url);
-      if (fs.existsSync(logoPath)) {
-        try {
-          fs.unlinkSync(logoPath);
-        } catch (error) {
-          // Log error but don't fail the request
-          console.error("Failed to delete logo file:", error);
-        }
+      const storagePath = storagePathFromUrl(currentTenant.logo_url);
+      if (storagePath) {
+        await supabase.storage.from(BUCKET).remove([storagePath]);
       }
     }
 
-    // Update tenant to remove logo URL
-    const [updated] = await db
+    await db
       .update(tenants)
       .set({ logo_url: null, updated_at: new Date() })
-      .where(eq(tenants.id, req.tenantId!))
-      .returning();
+      .where(eq(tenants.id, req.tenantId!));
 
     res.json({ message: "Logo deleted successfully" });
   },
