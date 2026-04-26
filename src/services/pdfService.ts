@@ -4,11 +4,10 @@ import {
   samples,
   clients,
   users,
-  test_methods,
   tenants,
   result_templates,
 } from "../db/schema";
-import { eq, and } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { createClient } from "@supabase/supabase-js";
 import { logger } from "../utils/logger";
 
@@ -185,11 +184,14 @@ function buildCoaHtml(ctx: {
   <div class="watermark">${allPass ? "PASS" : "FAIL"}</div>
   
   <div class="header">
-    <div>
-      <div class="lab-name">${tenant?.name || "Countrylab"}</div>
-      <div class="doc-title">Certificate of Analysis</div>
-      ${tenant?.accreditation_number ? `<div style="font-size:11px;color:#64748b;margin-top:4px">Accreditation No: ${tenant.accreditation_number}</div>` : ""}
-      ${nisStandardRef ? `<div style="font-size:11px;color:#64748b;margin-top:4px">Standard: ${nisStandardRef}</div>` : ""}
+    <div style="display:flex;align-items:center;gap:16px">
+      ${tenant?.logo_url ? `<img src="${tenant.logo_url}" alt="${tenant.name} logo" style="max-height:64px;max-width:140px;object-fit:contain;flex-shrink:0;">` : ""}
+      <div>
+        <div class="lab-name">${tenant?.name || "Countrylab"}</div>
+        <div class="doc-title">Certificate of Analysis</div>
+        ${tenant?.accreditation_number ? `<div style="font-size:11px;color:#64748b;margin-top:4px">Accreditation No: ${tenant.accreditation_number}</div>` : ""}
+        ${nisStandardRef ? `<div style="font-size:11px;color:#64748b;margin-top:4px">Standard: ${nisStandardRef}</div>` : ""}
+      </div>
     </div>
     <div style="text-align:right">
       <span class="badge">${allPass ? "All Tests Passed" : "Some Tests Failed"}</span>
