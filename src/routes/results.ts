@@ -8,6 +8,7 @@ import {
   result_changes,
   users,
   notifications,
+  tenants,
 } from "../db/schema";
 import {
   authenticate,
