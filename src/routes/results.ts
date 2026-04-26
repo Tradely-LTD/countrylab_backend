@@ -502,9 +502,15 @@ router.get("/verify/:qrHash", async (req: Request, res: Response) => {
         matrix: samples.matrix,
         collection_date: samples.collection_date,
       },
+      org: {
+        name: tenants.name,
+        logo_url: tenants.logo_url,
+        accreditation_number: tenants.accreditation_number,
+      },
     })
     .from(results)
     .leftJoin(samples, eq(results.sample_id, samples.id))
+    .leftJoin(tenants, eq(results.tenant_id, tenants.id))
     .where(eq(results.qr_hash, req.params.qrHash))
     .limit(1);
 
@@ -517,7 +523,7 @@ router.get("/verify/:qrHash", async (req: Request, res: Response) => {
 
   res.json({
     verified: true,
-    message: "Authentic Report — Verified by Countrylab",
+    message: `Authentic Report — Verified by ${result.org?.name || "Countrylab"}`,
     data: {
       sample: result.sample,
       approved_at: result.approved_at,
@@ -525,6 +531,7 @@ router.get("/verify/:qrHash", async (req: Request, res: Response) => {
       parameters: result.parameters,
       qr_code_url: result.qr_code_url,
       qr_hash: result.qr_hash,
+      org: result.org,
     },
   });
 });

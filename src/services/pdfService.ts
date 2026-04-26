@@ -95,14 +95,11 @@ export async function generateCoaPdf(data: CoaData): Promise<string> {
 
     if (error) {
       logger.error("CoA upload error:", error);
-      return verifyUrl;
     }
 
-    const { data: urlData } = supabase.storage
-      .from(process.env.SUPABASE_STORAGE_BUCKET || "countrylab-files")
-      .getPublicUrl(fileName);
-
-    return urlData.publicUrl;
+    // Always return the verify page URL — the HTML is stored in Supabase
+    // for archival only. Serving HTML directly from Supabase breaks CSS/images.
+    return verifyUrl;
   } catch (error) {
     logger.error("PDF generation error:", error);
     return `${process.env.FRONTEND_URL}/verify/${data.qr_hash}`;
