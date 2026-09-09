@@ -163,8 +163,8 @@ async function bootstrap() {
   try {
     await initializeSchema();
     await checkDbConnection();
-    app.listen(PORT, "127.0.0.1", () => {
-      logger.info(`🚀 Countrylab LMS API running on 127.0.0.1:${PORT}`);
+    app.listen(PORT, "0.0.0.0", () => {
+      logger.info(`🚀 Countrylab LMS API running on 0.0.0.0:${PORT}`);
       logger.info(`📋 Environment: ${process.env.NODE_ENV || "development"}`);
       logger.info(
         `🗄️  Database Schema: ${process.env.DATABASE_SCHEMA || "countrylab_lms"}`,
