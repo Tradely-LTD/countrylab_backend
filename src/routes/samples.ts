@@ -6,7 +6,7 @@ import { samples, clients, users, audit_logs } from "../db/schema";
 import {
   authenticate,
   requireRole,
-  LAB_ROLES,
+  SAMPLE_ROLES,
   STAFF_ROLES,
 } from "../middleware/auth";
 import { createAuditLog } from "../middleware/audit";
@@ -194,7 +194,7 @@ router.get("/:id", authenticate, async (req: Request, res: Response) => {
 router.post(
   "/",
   authenticate,
-  requireRole(...LAB_ROLES, "inventory_manager"),
+  requireRole(...SAMPLE_ROLES),
   async (req: Request, res: Response) => {
     const body = createSampleSchema.parse(req.body);
 
@@ -256,7 +256,7 @@ router.post(
 router.patch(
   "/:id",
   authenticate,
-  requireRole(...LAB_ROLES),
+  requireRole(...SAMPLE_ROLES),
   async (req: Request, res: Response) => {
     const [existing] = await db
       .select()
@@ -315,6 +315,9 @@ router.patch(
   requireRole(...STAFF_ROLES),
   async (req: Request, res: Response) => {
     const { status, reason } = updateStatusSchema.parse(req.body);
+    if (status === "approved" && req.user!.role === "lab_analyst") {
+      throw new AppError(403, "Lab analysts cannot approve samples");
+    }
 
     const [existing] = await db
       .select()

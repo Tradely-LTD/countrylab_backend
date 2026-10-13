@@ -32,6 +32,13 @@ export const userRoleEnum = countrylabSchema.enum("user_role", [
   "finance",
   "business_development",
   "marketer",
+  "general_manager",
+  "hr_manager",
+  "operations_manager",
+  "lab_manager",
+  "secretary",
+  "marketing_officer",
+  "internal_auditor",
 ]);
 
 export const sampleStatusEnum = countrylabSchema.enum("sample_status", [
@@ -726,6 +733,34 @@ export const audit_logs = countrylabSchema.table(
     userIdx: index("audit_user_idx").on(t.user_id),
     actionIdx: index("audit_action_idx").on(t.action),
     createdAtIdx: index("audit_created_at_idx").on(t.created_at),
+  }),
+);
+
+// ─── Staff Training Logs ──────────────────────────────────────────────────────
+
+export const staff_training_logs = countrylabSchema.table(
+  "staff_training_logs",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    tenant_id: uuid("tenant_id")
+      .references(() => tenants.id, { onDelete: "cascade" })
+      .notNull(),
+    user_id: uuid("user_id")
+      .references(() => users.id, { onDelete: "cascade" })
+      .notNull(),
+    title: varchar("title", { length: 255 }).notNull(),
+    category: varchar("category", { length: 100 }), // Induction | Technical | Safety | Quality | Other
+    provider: varchar("provider", { length: 255 }),
+    completed_on: date("completed_on").notNull(),
+    expires_on: date("expires_on"),
+    notes: text("notes"),
+    recorded_by: uuid("recorded_by").references(() => users.id),
+    created_at: timestamp("created_at").defaultNow(),
+    updated_at: timestamp("updated_at").defaultNow(),
+  },
+  (t) => ({
+    tenantIdx: index("staff_training_tenant_idx").on(t.tenant_id),
+    userIdx: index("staff_training_user_idx").on(t.user_id),
   }),
 );
 

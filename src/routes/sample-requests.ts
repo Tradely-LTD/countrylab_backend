@@ -3,7 +3,13 @@ import { z } from "zod";
 import { eq, and, desc, sql } from "drizzle-orm";
 import { db } from "../db";
 import { sample_requests, clients, users, samples } from "../db/schema";
-import { authenticate, requireRole, STAFF_ROLES } from "../middleware/auth";
+import {
+  authenticate,
+  requireRole,
+  hasRole,
+  STAFF_ROLES,
+  REQUEST_APPROVAL_ROLES,
+} from "../middleware/auth";
 import { AppError } from "../middleware/errorHandler";
 import { logger } from "../utils/logger";
 import {
@@ -357,10 +363,17 @@ router.get("/:id", authenticate, async (req: Request, res: Response) => {
 router.put(
   "/:id",
   authenticate,
-  requireRole(...STAFF_ROLES),
+  requireRole(...STAFF_ROLES, "marketing_officer"),
   async (req: Request, res: Response) => {
     try {
       const body = updateRequestSchema.parse(req.body);
+
+      if (
+        body.status === "approved" &&
+        !hasRole(req.user!.role, REQUEST_APPROVAL_ROLES)
+      ) {
+        throw new AppError(403, "Your role cannot approve sample requests");
+      }
 
       const updateData: any = { ...body, updated_at: new Date() };
 

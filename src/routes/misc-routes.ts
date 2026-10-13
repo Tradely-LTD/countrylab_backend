@@ -20,8 +20,12 @@ import {
 import {
   authenticate,
   requireRole,
+  hasRole,
   ADMIN_ROLES,
   STAFF_ROLES,
+  AUDIT_ROLES,
+  INVOICE_ROLES,
+  REPORTING_ROLES,
 } from "../middleware/auth";
 import { createAuditLog } from "../middleware/audit";
 import { AppError } from "../middleware/errorHandler";
@@ -245,6 +249,9 @@ clientsRouter.post(
     "business_development",
     "finance",
     "marketer",
+    "operations_manager",
+    "secretary",
+    "marketing_officer",
   ),
   async (req: Request, res: Response) => {
     const body = clientSchema.parse(req.body);
@@ -272,6 +279,8 @@ clientsRouter.put(
     "quality_manager",
     "business_development",
     "finance",
+    "operations_manager",
+    "secretary",
   ),
   async (req: Request, res: Response) => {
     const body = clientSchema.partial().parse(req.body);
@@ -377,6 +386,8 @@ clientsRouter.patch(
     "quality_manager",
     "business_development",
     "finance",
+    "operations_manager",
+    "secretary",
   ),
   async (req: Request, res: Response) => {
     const { status } = z
@@ -419,6 +430,8 @@ clientsRouter.post(
     "quality_manager",
     "business_development",
     "finance",
+    "operations_manager",
+    "secretary",
   ),
   async (req: Request, res: Response) => {
     const body = z
@@ -567,7 +580,7 @@ usersRouter.get("/me", authenticate, async (req: Request, res: Response) => {
 usersRouter.get(
   "/",
   authenticate,
-  requireRole(...ADMIN_ROLES, "quality_manager"),
+  requireRole(...ADMIN_ROLES, "quality_manager", "lab_manager"),
   async (req: Request, res: Response) => {
     const list = await db
       .select({
@@ -607,6 +620,13 @@ usersRouter.post(
           "finance",
           "business_development",
           "marketer",
+          "general_manager",
+          "hr_manager",
+          "operations_manager",
+          "lab_manager",
+          "secretary",
+          "marketing_officer",
+          "internal_auditor",
         ]),
         department: z.string().optional(),
         phone: z.string().optional(),
@@ -645,7 +665,7 @@ usersRouter.post(
         role: body.role,
         department: body.department,
         phone: body.phone,
-        requires_2fa: ["md", "super_admin", "finance"].includes(body.role),
+        requires_2fa: hasRole(body.role, ["md", "super_admin", "finance"]),
         referral_code: referralCode,
       })
       .returning();
@@ -744,7 +764,7 @@ export const auditRouter = Router();
 auditRouter.get(
   "/",
   authenticate,
-  requireRole("super_admin", "md", "quality_manager"),
+  requireRole(...AUDIT_ROLES),
   async (req: Request, res: Response) => {
     const {
       page = "1",
@@ -871,7 +891,7 @@ dashboardRouter.get(
             lte(assets.next_calibration_date, thirtyDays),
           ),
         ),
-      ["md", "super_admin", "finance"].includes(role)
+      hasRole(role, ["md", "super_admin", "finance"])
         ? db
             .select({
               total: sql<number>`COALESCE(SUM(${invoices.total}), 0)::float`,
@@ -1029,7 +1049,7 @@ export const invoicesRouter = Router();
 invoicesRouter.get(
   "/",
   authenticate,
-  requireRole("super_admin", "md", "finance", "business_development"),
+  requireRole(...INVOICE_ROLES, ...REPORTING_ROLES),
   async (req: Request, res: Response) => {
     const { status, client_id } = req.query as Record<string, string>;
     const conditions = [eq(invoices.tenant_id, req.tenantId!)];
@@ -1071,7 +1091,7 @@ invoicesRouter.get(
 invoicesRouter.get(
   "/:id",
   authenticate,
-  requireRole("super_admin", "md", "finance", "business_development"),
+  requireRole(...INVOICE_ROLES, ...REPORTING_ROLES),
   async (req: Request, res: Response) => {
     const [invoice] = await db
       .select({
@@ -1135,7 +1155,7 @@ invoicesRouter.get(
 invoicesRouter.post(
   "/",
   authenticate,
-  requireRole("super_admin", "md", "finance", "business_development"),
+  requireRole(...INVOICE_ROLES),
   async (req: Request, res: Response) => {
     const body = z
       .object({
@@ -1247,7 +1267,7 @@ invoicesRouter.post(
 invoicesRouter.put(
   "/:id",
   authenticate,
-  requireRole("super_admin", "md", "finance"),
+  requireRole("super_admin", "md", "finance", "secretary"),
   async (req: Request, res: Response) => {
     const body = z
       .object({

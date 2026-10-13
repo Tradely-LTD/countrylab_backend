@@ -112,7 +112,7 @@ router.get("/", authenticate, async (req: Request, res: Response) => {
 router.get(
   "/all",
   authenticate,
-  requireRole("quality_manager", "md", "super_admin"),
+  requireRole("quality_manager", "lab_manager", "md", "super_admin"),
   async (req: Request, res: Response) => {
     try {
       const allTemplates = await db
@@ -174,7 +174,7 @@ router.get("/:id", authenticate, async (req: Request, res: Response) => {
 router.post(
   "/",
   authenticate,
-  requireRole("quality_manager", "md", "super_admin"),
+  requireRole("quality_manager", "lab_manager", "md", "super_admin"),
   async (req: Request, res: Response) => {
     const body = createTemplateSchema.parse(req.body);
 
@@ -233,7 +233,7 @@ router.post(
 router.patch(
   "/:id",
   authenticate,
-  requireRole("quality_manager", "md", "super_admin"),
+  requireRole("quality_manager", "lab_manager", "md", "super_admin"),
   async (req: Request, res: Response) => {
     const body = patchTemplateSchema.parse(req.body);
 
@@ -336,7 +336,7 @@ router.patch(
 router.delete(
   "/:id",
   authenticate,
-  requireRole("quality_manager", "md", "super_admin"),
+  requireRole("quality_manager", "lab_manager", "md", "super_admin"),
   async (req: Request, res: Response) => {
     const [existing] = await db
       .select()
@@ -386,7 +386,7 @@ router.delete(
 router.post(
   "/import",
   authenticate,
-  requireRole("quality_manager", "md", "super_admin"),
+  requireRole("quality_manager", "lab_manager", "md", "super_admin"),
   upload.single("file"),
   async (req: Request, res: Response) => {
     if (!req.file) {

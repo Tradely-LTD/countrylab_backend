@@ -15,7 +15,6 @@ import {
   requireRole,
   INVENTORY_ROLES,
   STAFF_ROLES,
-  APPROVAL_ROLES,
 } from "../middleware/auth";
 import { createAuditLog } from "../middleware/audit";
 import { AppError } from "../middleware/errorHandler";
@@ -302,7 +301,7 @@ assetsRouter.get(
 assetsRouter.post(
   "/",
   authenticate,
-  requireRole("super_admin", "md", "inventory_manager"),
+  requireRole("super_admin", "md", "inventory_manager", "operations_manager"),
   async (req: Request, res: Response) => {
     const body = assetSchema.parse(req.body);
     const [newAsset] = await db
@@ -330,7 +329,7 @@ assetsRouter.post(
 assetsRouter.patch(
   "/:id",
   authenticate,
-  requireRole("super_admin", "md", "inventory_manager"),
+  requireRole("super_admin", "md", "inventory_manager", "operations_manager"),
   async (req: Request, res: Response) => {
     const body = assetSchema.partial().parse(req.body);
     const [updated] = await db
@@ -348,7 +347,14 @@ assetsRouter.patch(
 assetsRouter.post(
   "/:id/log",
   authenticate,
-  requireRole("super_admin", "md", "inventory_manager", "quality_manager"),
+  requireRole(
+    "super_admin",
+    "md",
+    "inventory_manager",
+    "quality_manager",
+    "lab_manager",
+    "operations_manager",
+  ),
   async (req: Request, res: Response) => {
     const { action, description, next_due_date, attachment_url } = z
       .object({
