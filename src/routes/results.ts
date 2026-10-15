@@ -12,9 +12,7 @@ import {
 } from "../db/schema";
 import {
   authenticate,
-  requireRole,
-  LAB_ROLES,
-  APPROVAL_ROLES,
+  requirePermission,
 } from "../middleware/auth";
 import { createAuditLog } from "../middleware/audit";
 import { AppError } from "../middleware/errorHandler";
@@ -60,7 +58,7 @@ const updateResultSchema = z.object({
 
 // ─── GET /results ─────────────────────────────────────────────────────────────
 
-router.get("/", authenticate, async (req: Request, res: Response) => {
+router.get("/", authenticate, requirePermission("results.view"), async (req: Request, res: Response) => {
   const {
     page = "1",
     limit = "25",
@@ -115,7 +113,7 @@ router.get("/", authenticate, async (req: Request, res: Response) => {
 
 // ─── GET /results/:id ─────────────────────────────────────────────────────────
 
-router.get("/:id", authenticate, async (req: Request, res: Response) => {
+router.get("/:id", authenticate, requirePermission("results.view"), async (req: Request, res: Response) => {
   const [result] = await db
     .select({
       id: results.id,
@@ -175,7 +173,7 @@ router.get("/:id", authenticate, async (req: Request, res: Response) => {
 router.post(
   "/",
   authenticate,
-  requireRole(...LAB_ROLES),
+  requirePermission("results.create"),
   async (req: Request, res: Response) => {
     const body = createResultSchema.parse(req.body);
 
@@ -241,7 +239,7 @@ router.post(
 router.put(
   "/:id",
   authenticate,
-  requireRole(...LAB_ROLES),
+  requirePermission("results.update"),
   async (req: Request, res: Response) => {
     const body = updateResultSchema.parse(req.body);
 
@@ -302,7 +300,7 @@ router.put(
 router.post(
   "/:id/submit",
   authenticate,
-  requireRole(...LAB_ROLES),
+  requirePermission("results.update"),
   async (req: Request, res: Response) => {
     const [existing] = await db
       .select()
@@ -341,7 +339,7 @@ router.post(
       type: "RESULT_PENDING_REVIEW",
       title: "Result Submitted for Review",
       message: `A result has been submitted and awaits your approval.`,
-      roles: ["md", "super_admin"],
+      permission: "results.approve",
       link: `/results/${existing.id}`,
     });
 
@@ -364,7 +362,7 @@ router.post(
 router.post(
   "/:id/approve",
   authenticate,
-  requireRole(...APPROVAL_ROLES),
+  requirePermission("results.approve"),
   async (req: Request, res: Response) => {
     const [existing] = await db
       .select()
@@ -437,7 +435,7 @@ router.post(
 router.post(
   "/:id/reject",
   authenticate,
-  requireRole(...APPROVAL_ROLES),
+  requirePermission("results.approve"),
   async (req: Request, res: Response) => {
     const { reason } = z.object({ reason: z.string().min(10) }).parse(req.body);
 
@@ -469,7 +467,7 @@ router.post(
 
 // ─── GET /results/:id/coa (Download CoA PDF) ──────────────────────────────────
 
-router.get("/:id/coa", authenticate, async (req: Request, res: Response) => {
+router.get("/:id/coa", authenticate, requirePermission("results.view"), async (req: Request, res: Response) => {
   const [result] = await db
     .select()
     .from(results)
@@ -542,7 +540,7 @@ router.get("/verify/:qrHash", async (req: Request, res: Response) => {
 router.get(
   "/meta/queue",
   authenticate,
-  requireRole(...APPROVAL_ROLES),
+  requirePermission("results.approve"),
   async (req: Request, res: Response) => {
     const queue = await db
       .select({
@@ -581,7 +579,7 @@ router.get(
 router.post(
   "/:id/regenerate-qr",
   authenticate,
-  requireRole(...APPROVAL_ROLES),
+  requirePermission("results.approve"),
   async (req: Request, res: Response) => {
     const [existing] = await db
       .select()
@@ -628,7 +626,7 @@ router.post(
 router.delete(
   "/:id",
   authenticate,
-  requireRole(...LAB_ROLES),
+  requirePermission("results.delete"),
   async (req: Request, res: Response) => {
     const [existing] = await db
       .select()

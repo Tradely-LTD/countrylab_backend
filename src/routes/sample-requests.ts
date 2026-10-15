@@ -5,10 +5,8 @@ import { db } from "../db";
 import { sample_requests, clients, users, samples } from "../db/schema";
 import {
   authenticate,
-  requireRole,
-  hasRole,
-  STAFF_ROLES,
-  REQUEST_APPROVAL_ROLES,
+  requirePermission,
+  can,
 } from "../middleware/auth";
 import { AppError } from "../middleware/errorHandler";
 import { logger } from "../utils/logger";
@@ -247,7 +245,7 @@ router.post("/public", async (req: Request, res: Response) => {
 
 // ─── GET /sample-requests ─────────────────────────────────────────────────────
 
-router.get("/", authenticate, async (req: Request, res: Response) => {
+router.get("/", authenticate, requirePermission("sample_requests.view"), async (req: Request, res: Response) => {
   try {
     const {
       page = "1",
@@ -319,7 +317,7 @@ router.get("/", authenticate, async (req: Request, res: Response) => {
 
 // ─── GET /sample-requests/:id ─────────────────────────────────────────────────
 
-router.get("/:id", authenticate, async (req: Request, res: Response) => {
+router.get("/:id", authenticate, requirePermission("sample_requests.view"), async (req: Request, res: Response) => {
   try {
     const [request] = await db
       .select({
@@ -363,14 +361,14 @@ router.get("/:id", authenticate, async (req: Request, res: Response) => {
 router.put(
   "/:id",
   authenticate,
-  requireRole(...STAFF_ROLES, "marketing_officer"),
+  requirePermission("sample_requests.update"),
   async (req: Request, res: Response) => {
     try {
       const body = updateRequestSchema.parse(req.body);
 
       if (
         body.status === "approved" &&
-        !hasRole(req.user!.role, REQUEST_APPROVAL_ROLES)
+        !(await can(req, "sample_requests.approve"))
       ) {
         throw new AppError(403, "Your role cannot approve sample requests");
       }
@@ -443,7 +441,7 @@ router.put(
 router.post(
   "/:id/convert-to-sample",
   authenticate,
-  requireRole(...STAFF_ROLES),
+  requirePermission("sample_requests.convert"),
   async (req: Request, res: Response) => {
     try {
       const [request] = await db

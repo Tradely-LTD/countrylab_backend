@@ -3,7 +3,7 @@ import { z } from "zod";
 import { eq, and, desc, sql, gte, lte } from "drizzle-orm";
 import { db } from "../db";
 import { users, leads, clients, tenants } from "../db/schema";
-import { authenticate, requireRole, ADMIN_ROLES } from "../middleware/auth";
+import { authenticate, requirePermission } from "../middleware/auth";
 import { AppError } from "../middleware/errorHandler";
 
 const router = Router();
@@ -101,7 +101,7 @@ router.post("/ref/:code", async (req: Request, res: Response) => {
 router.get(
   "/",
   authenticate,
-  requireRole(...ADMIN_ROLES),
+  requirePermission("marketers.view"),
   async (req: Request, res: Response) => {
     const marketers = await db
       .select({
@@ -153,7 +153,7 @@ router.get(
 router.get(
   "/leads",
   authenticate,
-  requireRole(...ADMIN_ROLES, "marketer"),
+  requirePermission("leads.view"),
   async (req: Request, res: Response) => {
     const { status, marketer_id, from, to, search } = req.query as Record<
       string,
@@ -231,7 +231,7 @@ router.get(
 router.post(
   "/leads",
   authenticate,
-  requireRole(...ADMIN_ROLES, "marketer"),
+  requirePermission("leads.create"),
   async (req: Request, res: Response) => {
     const body = z
       .object({
@@ -276,7 +276,7 @@ router.post(
 router.put(
   "/leads/:id",
   authenticate,
-  requireRole(...ADMIN_ROLES, "marketer"),
+  requirePermission("leads.update"),
   async (req: Request, res: Response) => {
     const body = z
       .object({
@@ -314,7 +314,7 @@ router.put(
 router.patch(
   "/leads/:id/status",
   authenticate,
-  requireRole(...ADMIN_ROLES, "marketer"),
+  requirePermission("leads.update"),
   async (req: Request, res: Response) => {
     const { status, client_id } = z
       .object({
@@ -353,7 +353,7 @@ router.patch(
 router.get(
   "/analytics",
   authenticate,
-  requireRole(...ADMIN_ROLES),
+  requirePermission("marketers.view"),
   async (req: Request, res: Response) => {
     const { from, to } = req.query as Record<string, string>;
 
@@ -420,7 +420,7 @@ router.get(
 router.get(
   "/my-stats",
   authenticate,
-  requireRole("marketer"),
+  requirePermission("leads.view"),
   async (req: Request, res: Response) => {
     const [marketer] = await db
       .select({

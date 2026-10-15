@@ -21,6 +21,8 @@ export const countrylabSchema = pgSchema("countrylab_lms");
 
 // ─── Enums ────────────────────────────────────────────────────────────────────
 
+// Legacy: users.role is now free text so tenants can define custom roles
+// (see the roles table). The database type is kept for older migrations.
 export const userRoleEnum = countrylabSchema.enum("user_role", [
   "super_admin",
   "md",
@@ -155,7 +157,7 @@ export const users = countrylabSchema.table(
     supabase_user_id: uuid("supabase_user_id").unique(),
     email: varchar("email", { length: 255 }).notNull(),
     full_name: varchar("full_name", { length: 255 }).notNull(),
-    role: userRoleEnum("role").notNull().default("lab_analyst"),
+    role: varchar("role", { length: 50 }).notNull().default("lab_analyst"),
     department: varchar("department", { length: 100 }),
     phone: varchar("phone", { length: 50 }),
     avatar_url: text("avatar_url"),
@@ -733,6 +735,30 @@ export const audit_logs = countrylabSchema.table(
     userIdx: index("audit_user_idx").on(t.user_id),
     actionIdx: index("audit_action_idx").on(t.action),
     createdAtIdx: index("audit_created_at_idx").on(t.created_at),
+  }),
+);
+
+// ─── Roles & Permissions ──────────────────────────────────────────────────────
+// One row per tenant role. Built-in roles only get a row once an admin edits
+// them; until then their defaults come from src/lib/permissions.ts.
+
+export const roles = countrylabSchema.table(
+  "roles",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    tenant_id: uuid("tenant_id")
+      .references(() => tenants.id, { onDelete: "cascade" })
+      .notNull(),
+    key: varchar("key", { length: 50 }).notNull(),
+    name: varchar("name", { length: 100 }).notNull(),
+    description: text("description"),
+    is_system: boolean("is_system").default(false).notNull(),
+    permissions: jsonb("permissions").$type<string[]>().default([]).notNull(),
+    created_at: timestamp("created_at").defaultNow(),
+    updated_at: timestamp("updated_at").defaultNow(),
+  },
+  (t) => ({
+    tenantKeyIdx: uniqueIndex("roles_tenant_key_idx").on(t.tenant_id, t.key),
   }),
 );
 

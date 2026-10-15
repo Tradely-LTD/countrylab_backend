@@ -3,7 +3,7 @@ import { z } from "zod";
 import { eq, sql } from "drizzle-orm";
 import { db } from "../db";
 import { tenants } from "../db/schema";
-import { authenticate, requireRole, ADMIN_ROLES } from "../middleware/auth";
+import { authenticate, requirePermission } from "../middleware/auth";
 import { AppError } from "../middleware/errorHandler";
 import multer from "multer";
 import path from "path";
@@ -109,7 +109,7 @@ router.get(
 router.put(
   "/organization",
   authenticate,
-  requireRole(...ADMIN_ROLES),
+  requirePermission("settings.update"),
   async (req: Request, res: Response) => {
     const schema = z.object({
       name: z.string().min(1, "Organization name is required"),
@@ -169,7 +169,7 @@ router.put(
 router.post(
   "/organization/logo",
   authenticate,
-  requireRole(...ADMIN_ROLES),
+  requirePermission("settings.update"),
   (req, res, next) => {
     upload.single("logo")(req, res, (err) => {
       if (err) return handleMulterError(err, req, res, next);
@@ -242,7 +242,7 @@ router.post(
 router.delete(
   "/organization/logo",
   authenticate,
-  requireRole(...ADMIN_ROLES),
+  requirePermission("settings.update"),
   async (req: Request, res: Response) => {
     const [currentTenant] = await db
       .select({ logo_url: tenants.logo_url })
@@ -292,7 +292,7 @@ router.get(
 router.put(
   "/bank-accounts",
   authenticate,
-  requireRole("super_admin", "md", "finance"),
+  requirePermission("settings.bank_accounts"),
   async (req: Request, res: Response) => {
     const schema = z.array(
       z.object({

@@ -6,9 +6,7 @@ import { db } from "../db";
 import { staff_training_logs, users } from "../db/schema";
 import {
   authenticate,
-  requireRole,
-  TRAINING_MANAGER_ROLES,
-  TRAINING_VIEW_ROLES,
+  requirePermission,
 } from "../middleware/auth";
 import { createAuditLog } from "../middleware/audit";
 import { AppError } from "../middleware/errorHandler";
@@ -32,7 +30,7 @@ const recorder = alias(users, "recorder");
 router.get(
   "/",
   authenticate,
-  requireRole(...TRAINING_VIEW_ROLES),
+  requirePermission("training_logs.view"),
   async (req: Request, res: Response) => {
     const { user_id } = req.query as Record<string, string>;
     const conditions = [eq(staff_training_logs.tenant_id, req.tenantId!)];
@@ -72,7 +70,7 @@ router.get(
 router.post(
   "/",
   authenticate,
-  requireRole(...TRAINING_MANAGER_ROLES),
+  requirePermission("training_logs.create"),
   async (req: Request, res: Response) => {
     const body = trainingSchema.parse(req.body);
 
@@ -108,7 +106,7 @@ router.post(
 router.patch(
   "/:id",
   authenticate,
-  requireRole(...TRAINING_MANAGER_ROLES),
+  requirePermission("training_logs.update"),
   async (req: Request, res: Response) => {
     const body = trainingSchema.omit({ user_id: true }).partial().parse(req.body);
 
@@ -140,7 +138,7 @@ router.patch(
 router.delete(
   "/:id",
   authenticate,
-  requireRole(...TRAINING_MANAGER_ROLES),
+  requirePermission("training_logs.delete"),
   async (req: Request, res: Response) => {
     const [deleted] = await db
       .delete(staff_training_logs)

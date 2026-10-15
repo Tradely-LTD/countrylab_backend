@@ -19,14 +19,12 @@ import {
 } from "../db/schema";
 import {
   authenticate,
-  requireRole,
-  hasRole,
-  ADMIN_ROLES,
-  STAFF_ROLES,
-  AUDIT_ROLES,
-  INVOICE_ROLES,
-  REPORTING_ROLES,
+  requirePermission,
+  can,
+  userPermissions,
 } from "../middleware/auth";
+import { getTenantRoles } from "../services/permissionService";
+import { SUPER_ADMIN } from "../lib/permissions";
 import { createAuditLog } from "../middleware/audit";
 import { AppError } from "../middleware/errorHandler";
 import { computeInvoiceTotals } from "../utils/invoiceComputation";
@@ -50,7 +48,7 @@ const clientSchema = z.object({
   notes: z.string().optional(),
 });
 
-clientsRouter.get("/", authenticate, async (req: Request, res: Response) => {
+clientsRouter.get("/", authenticate, requirePermission("clients.view"), async (req: Request, res: Response) => {
   const { search, created_by, from, to, status } = req.query as {
     search?: string;
     created_by?: string;
@@ -153,6 +151,7 @@ clientsRouter.get("/", authenticate, async (req: Request, res: Response) => {
 clientsRouter.get(
   "/export",
   authenticate,
+  requirePermission("clients.view"),
   async (req: Request, res: Response) => {
     const { created_by, from, to, status } = req.query as {
       created_by?: string;
@@ -227,7 +226,7 @@ clientsRouter.get(
   },
 );
 
-clientsRouter.get("/:id", authenticate, async (req: Request, res: Response) => {
+clientsRouter.get("/:id", authenticate, requirePermission("clients.view"), async (req: Request, res: Response) => {
   const [client] = await db
     .select()
     .from(clients)
@@ -242,17 +241,7 @@ clientsRouter.get("/:id", authenticate, async (req: Request, res: Response) => {
 clientsRouter.post(
   "/",
   authenticate,
-  requireRole(
-    "super_admin",
-    "md",
-    "quality_manager",
-    "business_development",
-    "finance",
-    "marketer",
-    "operations_manager",
-    "secretary",
-    "marketing_officer",
-  ),
+  requirePermission("clients.create"),
   async (req: Request, res: Response) => {
     const body = clientSchema.parse(req.body);
     const [newClient] = await db
@@ -273,15 +262,7 @@ clientsRouter.post(
 clientsRouter.put(
   "/:id",
   authenticate,
-  requireRole(
-    "super_admin",
-    "md",
-    "quality_manager",
-    "business_development",
-    "finance",
-    "operations_manager",
-    "secretary",
-  ),
+  requirePermission("clients.update"),
   async (req: Request, res: Response) => {
     const body = clientSchema.partial().parse(req.body);
     const [updated] = await db
@@ -303,6 +284,7 @@ clientsRouter.put(
 clientsRouter.get(
   "/:id/history",
   authenticate,
+  requirePermission("clients.view"),
   async (req: Request, res: Response) => {
     const { id } = req.params;
 
@@ -380,15 +362,7 @@ clientsRouter.get(
 clientsRouter.patch(
   "/:id/status",
   authenticate,
-  requireRole(
-    "super_admin",
-    "md",
-    "quality_manager",
-    "business_development",
-    "finance",
-    "operations_manager",
-    "secretary",
-  ),
+  requirePermission("clients.update"),
   async (req: Request, res: Response) => {
     const { status } = z
       .object({ status: z.enum(["lead", "active"]) })
@@ -424,15 +398,7 @@ clientsRouter.patch(
 clientsRouter.post(
   "/:id/interactions",
   authenticate,
-  requireRole(
-    "super_admin",
-    "md",
-    "quality_manager",
-    "business_development",
-    "finance",
-    "operations_manager",
-    "secretary",
-  ),
+  requirePermission("clients.update"),
   async (req: Request, res: Response) => {
     const body = z
       .object({
@@ -512,6 +478,7 @@ clientsRouter.post(
 clientsRouter.get(
   "/:id/interactions",
   authenticate,
+  requirePermission("clients.view"),
   async (req: Request, res: Response) => {
     const conditions = [
       eq(client_interactions.client_id, req.params.id),
@@ -574,13 +541,29 @@ usersRouter.get("/me", authenticate, async (req: Request, res: Response) => {
     .limit(1);
 
   if (!user) throw new AppError(404, "User not found");
-  res.json({ data: user });
+  const tenantRoles = await getTenantRoles(user.tenant_id);
+  res.json({
+    data: {
+      ...user,
+      role_name: tenantRoles.get(user.role)?.name ?? user.role,
+      permissions: [...(await userPermissions(req))],
+    },
+  });
 });
+
+/** The role must exist for this tenant; only a Super Admin may grant Super Admin. */
+async function assertAssignableRole(req: Request, role: string) {
+  const tenantRoles = await getTenantRoles(req.tenantId!);
+  if (!tenantRoles.has(role)) throw new AppError(400, `Unknown role: ${role}`);
+  if (role === SUPER_ADMIN && req.user!.role !== SUPER_ADMIN) {
+    throw new AppError(403, "Only a Super Admin can assign the Super Admin role");
+  }
+}
 
 usersRouter.get(
   "/",
   authenticate,
-  requireRole(...ADMIN_ROLES, "quality_manager", "lab_manager"),
+  requirePermission("team.view"),
   async (req: Request, res: Response) => {
     const list = await db
       .select({
@@ -603,35 +586,18 @@ usersRouter.get(
 usersRouter.post(
   "/",
   authenticate,
-  requireRole(...ADMIN_ROLES),
+  requirePermission("team.create"),
   async (req: Request, res: Response) => {
     const body = z
       .object({
         email: z.string().email(),
         full_name: z.string().min(1),
-        role: z.enum([
-          "super_admin",
-          "md",
-          "quality_manager",
-          "lab_analyst",
-          "procurement_officer",
-          "inventory_manager",
-          "customer",
-          "finance",
-          "business_development",
-          "marketer",
-          "general_manager",
-          "hr_manager",
-          "operations_manager",
-          "lab_manager",
-          "secretary",
-          "marketing_officer",
-          "internal_auditor",
-        ]),
+        role: z.string().min(1).max(50),
         department: z.string().optional(),
         phone: z.string().optional(),
       })
       .parse(req.body);
+    await assertAssignableRole(req, body.role);
 
     // Create Supabase auth user
     const { data: authUser, error } = await adminSupabase.auth.admin.createUser(
@@ -665,7 +631,7 @@ usersRouter.post(
         role: body.role,
         department: body.department,
         phone: body.phone,
-        requires_2fa: hasRole(body.role, ["md", "super_admin", "finance"]),
+        requires_2fa: ["md", "general_manager", "super_admin", "finance"].includes(body.role),
         referral_code: referralCode,
       })
       .returning();
@@ -687,7 +653,7 @@ usersRouter.post(
 usersRouter.patch(
   "/:id",
   authenticate,
-  requireRole(...ADMIN_ROLES),
+  requirePermission("team.update"),
   async (req: Request, res: Response) => {
     const body = z
       .object({
@@ -697,6 +663,17 @@ usersRouter.patch(
         is_active: z.boolean().optional(),
       })
       .parse(req.body);
+    if (body.role) await assertAssignableRole(req, body.role);
+    if (req.user!.role !== SUPER_ADMIN) {
+      const [target] = await db
+        .select({ role: users.role })
+        .from(users)
+        .where(and(eq(users.id, req.params.id), eq(users.tenant_id, req.tenantId!)))
+        .limit(1);
+      if (target?.role === SUPER_ADMIN) {
+        throw new AppError(403, "Only a Super Admin can change a Super Admin account");
+      }
+    }
 
     const [updated] = await db
       .update(users)
@@ -720,7 +697,7 @@ usersRouter.patch(
 usersRouter.post(
   "/:id/reset-password",
   authenticate,
-  requireRole(...ADMIN_ROLES),
+  requirePermission("team.update"),
   async (req: Request, res: Response) => {
     const [user] = await db
       .select({ id: users.id, email: users.email, full_name: users.full_name })
@@ -764,7 +741,7 @@ export const auditRouter = Router();
 auditRouter.get(
   "/",
   authenticate,
-  requireRole(...AUDIT_ROLES),
+  requirePermission("audit_logs.view"),
   async (req: Request, res: Response) => {
     const {
       page = "1",
@@ -826,8 +803,9 @@ export const dashboardRouter = Router();
 dashboardRouter.get(
   "/widgets",
   authenticate,
+  requirePermission("dashboard.view"),
   async (req: Request, res: Response) => {
-    const role = req.user!.role;
+    const canSeeRevenue = await can(req, "dashboard.revenue");
     const tenantId = req.tenantId!;
     const now = new Date();
     const thirtyDays = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
@@ -891,7 +869,7 @@ dashboardRouter.get(
             lte(assets.next_calibration_date, thirtyDays),
           ),
         ),
-      hasRole(role, ["md", "super_admin", "finance"])
+      canSeeRevenue
         ? db
             .select({
               total: sql<number>`COALESCE(SUM(${invoices.total}), 0)::float`,
@@ -944,6 +922,7 @@ dashboardRouter.get(
 dashboardRouter.get(
   "/recent-activity",
   authenticate,
+  requirePermission("dashboard.view"),
   async (req: Request, res: Response) => {
     const recentSamples = await db
       .select({
@@ -1049,7 +1028,7 @@ export const invoicesRouter = Router();
 invoicesRouter.get(
   "/",
   authenticate,
-  requireRole(...INVOICE_ROLES, ...REPORTING_ROLES),
+  requirePermission("invoices.view"),
   async (req: Request, res: Response) => {
     const { status, client_id } = req.query as Record<string, string>;
     const conditions = [eq(invoices.tenant_id, req.tenantId!)];
@@ -1091,7 +1070,7 @@ invoicesRouter.get(
 invoicesRouter.get(
   "/:id",
   authenticate,
-  requireRole(...INVOICE_ROLES, ...REPORTING_ROLES),
+  requirePermission("invoices.view"),
   async (req: Request, res: Response) => {
     const [invoice] = await db
       .select({
@@ -1155,7 +1134,7 @@ invoicesRouter.get(
 invoicesRouter.post(
   "/",
   authenticate,
-  requireRole(...INVOICE_ROLES),
+  requirePermission("invoices.create"),
   async (req: Request, res: Response) => {
     const body = z
       .object({
@@ -1267,7 +1246,7 @@ invoicesRouter.post(
 invoicesRouter.put(
   "/:id",
   authenticate,
-  requireRole("super_admin", "md", "finance", "secretary"),
+  requirePermission("invoices.update"),
   async (req: Request, res: Response) => {
     const body = z
       .object({
@@ -1386,7 +1365,7 @@ invoicesRouter.put(
 invoicesRouter.patch(
   "/:id/payment",
   authenticate,
-  requireRole("super_admin", "md", "finance"),
+  requirePermission("invoices.payment"),
   async (req: Request, res: Response) => {
     const { payment_method } = z
       .object({ payment_method: z.string() })
@@ -1424,7 +1403,7 @@ invoicesRouter.patch(
 invoicesRouter.delete(
   "/:id",
   authenticate,
-  requireRole("super_admin", "md"),
+  requirePermission("invoices.delete"),
   async (req: Request, res: Response) => {
     const [existing] = await db
       .select()

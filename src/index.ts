@@ -1,5 +1,6 @@
 import "dotenv/config";
 import express from "express";
+import "./utils/asyncErrors"; // route async errors → errorHandler, not a crash
 import cors from "cors";
 import helmet from "helmet";
 import morgan from "morgan";
@@ -9,6 +10,12 @@ import path from "path";
 import { checkDbConnection, initializeSchema } from "./db";
 import { logger } from "./utils/logger";
 import { errorHandler, notFound } from "./middleware/errorHandler";
+
+// Last line of defence: log stray async failures instead of letting one bad
+// request take the whole API down.
+process.on("unhandledRejection", (reason) => {
+  logger.error("Unhandled promise rejection:", reason);
+});
 
 // Routers
 import authRouter from "./routes/auth";
@@ -20,6 +27,7 @@ import sampleRequestsRouter from "./routes/sample-requests";
 import resultTemplatesRouter from "./routes/result-templates";
 import marketersRouter from "./routes/marketers";
 import trainingLogsRouter from "./routes/training-logs";
+import rolesRouter from "./routes/roles";
 import {
   inventoryRouter,
   assetsRouter,
@@ -139,6 +147,7 @@ app.use(`${API}/invoices`, invoicesRouter);
 app.use(`${API}/result-templates`, resultTemplatesRouter);
 app.use(`${API}/marketers`, marketersRouter);
 app.use(`${API}/training-logs`, trainingLogsRouter);
+app.use(`${API}/roles`, rolesRouter);
 
 // Public verification endpoint (no auth)
 app.use(`${API}/results/verify`, resultsRouter);
