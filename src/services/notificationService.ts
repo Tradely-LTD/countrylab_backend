@@ -2,6 +2,7 @@ import { db } from '../db';
 import { users, notifications } from '../db/schema';
 import { eq, and, inArray } from 'drizzle-orm';
 import { logger } from '../utils/logger';
+import { getTenantRoles } from './permissionService';
 
 interface NotifyParams {
   tenant_id: string;
@@ -10,6 +11,8 @@ interface NotifyParams {
   message?: string;
   link?: string;
   roles?: string[];
+  /** Notify every active user whose role holds this permission */
+  permission?: string;
   user_ids?: string[];
 }
 
@@ -17,7 +20,15 @@ export async function sendNotification(params: NotifyParams): Promise<void> {
   try {
     let recipientIds: string[] = params.user_ids || [];
 
-    if (params.roles && params.roles.length > 0) {
+    const roles = [...(params.roles ?? [])];
+    if (params.permission) {
+      const tenantRoles = await getTenantRoles(params.tenant_id);
+      for (const r of tenantRoles.values()) {
+        if (r.permissions.includes(params.permission)) roles.push(r.key);
+      }
+    }
+
+    if (roles.length > 0) {
       const roleUsers = await db
         .select({ id: users.id })
         .from(users)
@@ -25,7 +36,7 @@ export async function sendNotification(params: NotifyParams): Promise<void> {
           and(
             eq(users.tenant_id, params.tenant_id),
             eq(users.is_active, true),
-            inArray(users.role, params.roles as any[])
+            inArray(users.role, roles)
           )
         );
       recipientIds = [...new Set([...recipientIds, ...roleUsers.map((u) => u.id)])];

@@ -12,9 +12,7 @@ import {
 } from "../db/schema";
 import {
   authenticate,
-  requireRole,
-  INVENTORY_ROLES,
-  STAFF_ROLES,
+  requirePermission,
 } from "../middleware/auth";
 import { createAuditLog } from "../middleware/audit";
 import { AppError } from "../middleware/errorHandler";
@@ -54,6 +52,7 @@ const reagentSchema = z.object({
 inventoryRouter.get(
   "/reagents",
   authenticate,
+  requirePermission("inventory.view"),
   async (req: Request, res: Response) => {
     const {
       page = "1",
@@ -88,7 +87,7 @@ inventoryRouter.get(
 inventoryRouter.post(
   "/reagents",
   authenticate,
-  requireRole(...INVENTORY_ROLES),
+  requirePermission("inventory.create"),
   async (req: Request, res: Response) => {
     const body = reagentSchema.parse(req.body);
     const [newReagent] = await db
@@ -115,7 +114,7 @@ inventoryRouter.post(
 inventoryRouter.patch(
   "/reagents/:id",
   authenticate,
-  requireRole(...INVENTORY_ROLES),
+  requirePermission("inventory.update"),
   async (req: Request, res: Response) => {
     const body = reagentSchema.partial().parse(req.body);
     const [updated] = await db
@@ -143,7 +142,7 @@ inventoryRouter.patch(
 inventoryRouter.patch(
   "/reagents/:id/stock",
   authenticate,
-  requireRole(...INVENTORY_ROLES),
+  requirePermission("inventory.update"),
   async (req: Request, res: Response) => {
     const { adjustment, type } = z
       .object({
@@ -190,6 +189,7 @@ inventoryRouter.patch(
 inventoryRouter.get(
   "/reagents/alerts",
   authenticate,
+  requirePermission("inventory.view"),
   async (req: Request, res: Response) => {
     const now = new Date();
     const thirtyDays = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
@@ -258,7 +258,7 @@ const assetSchema = z.object({
   notes: z.string().optional(),
 });
 
-assetsRouter.get("/", authenticate, async (req: Request, res: Response) => {
+assetsRouter.get("/", authenticate, requirePermission("assets.view"), async (req: Request, res: Response) => {
   const list = await db
     .select({
       id: assets.id,
@@ -283,6 +283,7 @@ assetsRouter.get("/", authenticate, async (req: Request, res: Response) => {
 assetsRouter.get(
   "/due-calibration",
   authenticate,
+  requirePermission("assets.view"),
   async (req: Request, res: Response) => {
     const thirtyDays = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
     const list = await db
@@ -301,7 +302,7 @@ assetsRouter.get(
 assetsRouter.post(
   "/",
   authenticate,
-  requireRole("super_admin", "md", "inventory_manager", "operations_manager"),
+  requirePermission("assets.create"),
   async (req: Request, res: Response) => {
     const body = assetSchema.parse(req.body);
     const [newAsset] = await db
@@ -329,7 +330,7 @@ assetsRouter.post(
 assetsRouter.patch(
   "/:id",
   authenticate,
-  requireRole("super_admin", "md", "inventory_manager", "operations_manager"),
+  requirePermission("assets.update"),
   async (req: Request, res: Response) => {
     const body = assetSchema.partial().parse(req.body);
     const [updated] = await db
@@ -347,14 +348,7 @@ assetsRouter.patch(
 assetsRouter.post(
   "/:id/log",
   authenticate,
-  requireRole(
-    "super_admin",
-    "md",
-    "inventory_manager",
-    "quality_manager",
-    "lab_manager",
-    "operations_manager",
-  ),
+  requirePermission("assets.log"),
   async (req: Request, res: Response) => {
     const { action, description, next_due_date, attachment_url } = z
       .object({
@@ -397,6 +391,7 @@ assetsRouter.post(
 assetsRouter.get(
   "/:id/logs",
   authenticate,
+  requirePermission("assets.view"),
   async (req: Request, res: Response) => {
     const logs = await db
       .select({
@@ -460,7 +455,7 @@ function generatePONumber(): string {
 procurementRouter.get(
   "/requisitions",
   authenticate,
-  requireRole(...STAFF_ROLES),
+  requirePermission("requisitions.view"),
   async (req: Request, res: Response) => {
     const { status } = req.query as Record<string, string>;
     const conditions = [eq(requisitions.tenant_id, req.tenantId!)];
@@ -491,7 +486,7 @@ procurementRouter.get(
 procurementRouter.get(
   "/requisitions/:id",
   authenticate,
-  requireRole(...STAFF_ROLES),
+  requirePermission("requisitions.view"),
   async (req: Request, res: Response) => {
     const [requisition] = await db
       .select({
@@ -528,7 +523,7 @@ procurementRouter.get(
 procurementRouter.post(
   "/requisitions",
   authenticate,
-  requireRole(...STAFF_ROLES),
+  requirePermission("requisitions.create"),
   async (req: Request, res: Response) => {
     const body = requisitionSchema.parse(req.body);
     const [req_] = await db
@@ -558,7 +553,7 @@ procurementRouter.post(
 procurementRouter.patch(
   "/requisitions/:id",
   authenticate,
-  requireRole(...STAFF_ROLES),
+  requirePermission("requisitions.update"),
   async (req: Request, res: Response) => {
     const body = requisitionSchema.partial().parse(req.body);
     const [updated] = await db
@@ -595,7 +590,7 @@ procurementRouter.patch(
 procurementRouter.patch(
   "/requisitions/:id/submit",
   authenticate,
-  requireRole(...STAFF_ROLES),
+  requirePermission("requisitions.update"),
   async (req: Request, res: Response) => {
     const [updated] = await db
       .update(requisitions)
@@ -627,7 +622,7 @@ procurementRouter.patch(
 procurementRouter.patch(
   "/requisitions/:id/approve",
   authenticate,
-  requireRole("super_admin", "md", "finance", "procurement_officer"),
+  requirePermission("requisitions.approve"),
   async (req: Request, res: Response) => {
     const { action, rejection_reason } = z
       .object({
@@ -743,7 +738,7 @@ procurementRouter.patch(
 procurementRouter.get(
   "/purchase-orders",
   authenticate,
-  requireRole(...STAFF_ROLES),
+  requirePermission("purchase_orders.view"),
   async (req: Request, res: Response) => {
     const list = await db
       .select()
@@ -758,7 +753,7 @@ procurementRouter.get(
 procurementRouter.get(
   "/purchase-orders/:id",
   authenticate,
-  requireRole(...STAFF_ROLES),
+  requirePermission("purchase_orders.view"),
   async (req: Request, res: Response) => {
     const [po] = await db
       .select()
@@ -782,7 +777,7 @@ procurementRouter.get(
 procurementRouter.patch(
   "/purchase-orders/:id",
   authenticate,
-  requireRole("super_admin", "md", "procurement_officer", "finance"),
+  requirePermission("purchase_orders.update"),
   async (req: Request, res: Response) => {
     const body = z
       .object({
@@ -891,7 +886,7 @@ procurementRouter.patch(
 procurementRouter.delete(
   "/requisitions/:id",
   authenticate,
-  requireRole("super_admin"),
+  requirePermission("requisitions.delete"),
   async (req: Request, res: Response) => {
     const [deleted] = await db
       .delete(requisitions)
@@ -920,7 +915,7 @@ procurementRouter.delete(
 procurementRouter.delete(
   "/purchase-orders/:id",
   authenticate,
-  requireRole("super_admin"),
+  requirePermission("purchase_orders.delete"),
   async (req: Request, res: Response) => {
     const [deleted] = await db
       .delete(purchase_orders)

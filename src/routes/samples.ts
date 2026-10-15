@@ -5,9 +5,8 @@ import { db } from "../db";
 import { samples, clients, users, audit_logs } from "../db/schema";
 import {
   authenticate,
-  requireRole,
-  SAMPLE_ROLES,
-  STAFF_ROLES,
+  requirePermission,
+  can,
 } from "../middleware/auth";
 import { createAuditLog } from "../middleware/audit";
 import { AppError } from "../middleware/errorHandler";
@@ -55,7 +54,7 @@ const updateStatusSchema = z.object({
 
 // ─── GET /samples ─────────────────────────────────────────────────────────────
 
-router.get("/", authenticate, async (req: Request, res: Response) => {
+router.get("/", authenticate, requirePermission("samples.view"), async (req: Request, res: Response) => {
   try {
     const {
       page = "1",
@@ -133,7 +132,7 @@ router.get("/", authenticate, async (req: Request, res: Response) => {
 
 // ─── GET /samples/:id ─────────────────────────────────────────────────────────
 
-router.get("/:id", authenticate, async (req: Request, res: Response) => {
+router.get("/:id", authenticate, requirePermission("samples.view"), async (req: Request, res: Response) => {
   const [sample] = await db
     .select({
       id: samples.id,
@@ -194,7 +193,7 @@ router.get("/:id", authenticate, async (req: Request, res: Response) => {
 router.post(
   "/",
   authenticate,
-  requireRole(...SAMPLE_ROLES),
+  requirePermission("samples.create"),
   async (req: Request, res: Response) => {
     const body = createSampleSchema.parse(req.body);
 
@@ -256,7 +255,7 @@ router.post(
 router.patch(
   "/:id",
   authenticate,
-  requireRole(...SAMPLE_ROLES),
+  requirePermission("samples.update"),
   async (req: Request, res: Response) => {
     const [existing] = await db
       .select()
@@ -312,11 +311,11 @@ router.patch(
 router.patch(
   "/:id/status",
   authenticate,
-  requireRole(...STAFF_ROLES),
+  requirePermission("samples.status"),
   async (req: Request, res: Response) => {
     const { status, reason } = updateStatusSchema.parse(req.body);
-    if (status === "approved" && req.user!.role === "lab_analyst") {
-      throw new AppError(403, "Lab analysts cannot approve samples");
+    if (status === "approved" && !(await can(req, "samples.approve"))) {
+      throw new AppError(403, "You don't have permission to approve samples");
     }
 
     const [existing] = await db
@@ -368,7 +367,7 @@ router.patch(
 
 // ─── GET /samples/stats ───────────────────────────────────────────────────────
 
-router.get("/meta/stats", authenticate, async (req: Request, res: Response) => {
+router.get("/meta/stats", authenticate, requirePermission("samples.view"), async (req: Request, res: Response) => {
   const stats = await db
     .select({
       status: samples.status,

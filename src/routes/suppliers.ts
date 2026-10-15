@@ -3,7 +3,7 @@ import { z } from "zod";
 import { eq, and, desc, ilike, sql } from "drizzle-orm";
 import { db } from "../db";
 import { suppliers, purchase_orders, requisitions } from "../db/schema";
-import { authenticate, requireRole } from "../middleware/auth";
+import { authenticate, requirePermission } from "../middleware/auth";
 import { createAuditLog } from "../middleware/audit";
 import { AppError } from "../middleware/errorHandler";
 
@@ -32,7 +32,7 @@ const updateSupplierSchema = createSupplierSchema.partial();
 router.get(
   "/",
   authenticate,
-  requireRole("super_admin", "md", "procurement_officer", "inventory_manager"),
+  requirePermission("suppliers.view"),
   async (req: Request, res: Response) => {
     const {
       search,
@@ -80,7 +80,7 @@ router.get(
 router.get(
   "/:id",
   authenticate,
-  requireRole("super_admin", "md", "procurement_officer", "inventory_manager"),
+  requirePermission("suppliers.view"),
   async (req: Request, res: Response) => {
     const [supplier] = await db
       .select()
@@ -104,7 +104,7 @@ router.get(
 router.post(
   "/",
   authenticate,
-  requireRole("super_admin", "procurement_officer", "inventory_manager"),
+  requirePermission("suppliers.create"),
   async (req: Request, res: Response) => {
     const body = createSupplierSchema.parse(req.body);
 
@@ -135,7 +135,7 @@ router.post(
 router.put(
   "/:id",
   authenticate,
-  requireRole("super_admin", "procurement_officer", "inventory_manager"),
+  requirePermission("suppliers.update"),
   async (req: Request, res: Response) => {
     const body = updateSupplierSchema.parse(req.body);
 
@@ -177,7 +177,7 @@ router.put(
 router.delete(
   "/:id",
   authenticate,
-  requireRole("super_admin"),
+  requirePermission("suppliers.delete"),
   async (req: Request, res: Response) => {
     const [existing] = await db
       .select()
@@ -216,7 +216,7 @@ router.delete(
 router.get(
   "/:id/history",
   authenticate,
-  requireRole("super_admin", "md", "procurement_officer", "inventory_manager"),
+  requirePermission("suppliers.view"),
   async (req: Request, res: Response) => {
     const { id } = req.params;
 

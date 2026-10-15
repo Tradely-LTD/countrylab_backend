@@ -7,7 +7,7 @@ import {
   result_template_parameters,
   results,
 } from "../db/schema";
-import { authenticate, requireRole } from "../middleware/auth";
+import { authenticate, requirePermission } from "../middleware/auth";
 import { createAuditLog } from "../middleware/audit";
 import { AppError } from "../middleware/errorHandler";
 import { logger } from "../utils/logger";
@@ -67,7 +67,7 @@ const patchTemplateSchema = z.discriminatedUnion("action", [
 // ─── GET /result-templates ────────────────────────────────────────────────────
 // Returns only the latest active version per template name, sorted alphabetically
 
-router.get("/", authenticate, async (req: Request, res: Response) => {
+router.get("/", authenticate, requirePermission("templates.view"), async (req: Request, res: Response) => {
   try {
     // Get all active templates for tenant, then filter to latest version per name in JS
     const activeTemplates = await db
@@ -112,7 +112,7 @@ router.get("/", authenticate, async (req: Request, res: Response) => {
 router.get(
   "/all",
   authenticate,
-  requireRole("quality_manager", "lab_manager", "md", "super_admin"),
+  requirePermission("templates.update"),
   async (req: Request, res: Response) => {
     try {
       const allTemplates = await db
@@ -141,7 +141,7 @@ router.get(
 
 // ─── GET /result-templates/:id ────────────────────────────────────────────────
 
-router.get("/:id", authenticate, async (req: Request, res: Response) => {
+router.get("/:id", authenticate, requirePermission("templates.view"), async (req: Request, res: Response) => {
   try {
     const [template] = await db
       .select()
@@ -174,7 +174,7 @@ router.get("/:id", authenticate, async (req: Request, res: Response) => {
 router.post(
   "/",
   authenticate,
-  requireRole("quality_manager", "lab_manager", "md", "super_admin"),
+  requirePermission("templates.create"),
   async (req: Request, res: Response) => {
     const body = createTemplateSchema.parse(req.body);
 
@@ -233,7 +233,7 @@ router.post(
 router.patch(
   "/:id",
   authenticate,
-  requireRole("quality_manager", "lab_manager", "md", "super_admin"),
+  requirePermission("templates.update"),
   async (req: Request, res: Response) => {
     const body = patchTemplateSchema.parse(req.body);
 
@@ -336,7 +336,7 @@ router.patch(
 router.delete(
   "/:id",
   authenticate,
-  requireRole("quality_manager", "lab_manager", "md", "super_admin"),
+  requirePermission("templates.delete"),
   async (req: Request, res: Response) => {
     const [existing] = await db
       .select()
@@ -386,7 +386,7 @@ router.delete(
 router.post(
   "/import",
   authenticate,
-  requireRole("quality_manager", "lab_manager", "md", "super_admin"),
+  requirePermission("templates.create"),
   upload.single("file"),
   async (req: Request, res: Response) => {
     if (!req.file) {
