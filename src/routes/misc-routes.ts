@@ -26,12 +26,13 @@ import {
 import { getTenantRoles } from "../services/permissionService";
 import { SUPER_ADMIN } from "../lib/permissions";
 import { createAuditLog } from "../middleware/audit";
+import { logger } from "../utils/logger";
 import { AppError } from "../middleware/errorHandler";
 import { computeInvoiceTotals } from "../utils/invoiceComputation";
 import { createClient as supabaseAdmin } from "@supabase/supabase-js";
 import bcrypt from "bcryptjs";
 import { lt } from "drizzle-orm";
-import { sendPasswordResetEmail } from "../services/emailService";
+import { sendPasswordResetEmail, sendInvitationEmail } from "../services/emailService";
 
 // ════════════════════════════════════════════════════════════════
 // CLIENTS ROUTER
@@ -599,6 +600,13 @@ usersRouter.post(
       .parse(req.body);
     await assertAssignableRole(req, body.role);
 
+    const [existing] = await db
+      .select({ id: users.id })
+      .from(users)
+      .where(and(eq(users.tenant_id, req.tenantId!), eq(users.email, body.email)))
+      .limit(1);
+    if (existing) throw new AppError(409, `${body.email} is already on the team`);
+
     // Create Supabase auth user
     const { data: authUser, error } = await adminSupabase.auth.admin.createUser(
       {
@@ -607,8 +615,15 @@ usersRouter.post(
         email_confirm: true,
       },
     );
-    if (error)
-      throw new AppError(400, `Failed to create auth user: ${error.message}`);
+    if (error) {
+      if (/already (been )?registered/i.test(error.message)) {
+        throw new AppError(
+          409,
+          `${body.email} already has a login. Use a different email, or ask your administrator to remove the old account.`,
+        );
+      }
+      throw new AppError(400, `Failed to create login: ${error.message}`);
+    }
 
     // Auto-generate unique referral code for marketers (8-char alphanumeric)
     let referralCode: string | undefined;
@@ -621,7 +636,9 @@ usersRouter.post(
       referralCode = code;
     }
 
-    const [newUser] = await db
+    let newUser: typeof users.$inferSelect;
+    try {
+      [newUser] = await db
       .insert(users)
       .values({
         tenant_id: req.tenantId!,
@@ -635,6 +652,11 @@ usersRouter.post(
         referral_code: referralCode,
       })
       .returning();
+    } catch (insertError) {
+      // Don't leave a login behind with no Countrylab account attached
+      await adminSupabase.auth.admin.deleteUser(authUser.user.id).catch(() => {});
+      throw insertError;
+    }
 
     await createAuditLog({
       tenant_id: req.tenantId!,
@@ -643,9 +665,35 @@ usersRouter.post(
       table_name: "users",
       record_id: newUser.id,
     });
+    // Email a link to set their password; the login was created with a random one
+    let emailSent = false;
+    const { data: linkData, error: linkError } =
+      await adminSupabase.auth.admin.generateLink({
+        type: "recovery",
+        email: body.email,
+        options: { redirectTo: `${process.env.FRONTEND_URL || ""}/reset-password` },
+      });
+    if (linkData?.properties?.action_link) {
+      const roleName = (await getTenantRoles(req.tenantId!)).get(body.role)?.name ?? body.role;
+      emailSent = await sendInvitationEmail({
+        recipientEmail: body.email,
+        recipientName: body.full_name,
+        roleName,
+        inviterName: req.user!.full_name,
+        setPasswordLink: linkData.properties.action_link,
+      });
+    } else if (linkError) {
+      logger.error("Invitation link generation failed:", linkError);
+    }
+
     res.status(201).json({
       data: newUser,
-      message: "User created. An invitation email has been sent.",
+      email_sent: emailSent,
+      // When email isn't working, hand the admin the link to pass on directly
+      invite_link: emailSent ? undefined : linkData?.properties?.action_link,
+      message: emailSent
+        ? `Invitation sent to ${body.email}`
+        : `${body.full_name} was added, but the invitation email could not be sent. Copy the set-password link and send it to them directly.`,
     });
   },
 );
@@ -723,13 +771,19 @@ usersRouter.post(
       throw new AppError(400, `Failed to generate reset link: ${error?.message}`);
 
     // Send the link via the project's own SMTP (branded email)
-    await sendPasswordResetEmail({
+    const emailSent = await sendPasswordResetEmail({
       recipientEmail: user.email,
       recipientName: user.full_name,
       resetLink: linkData.properties.action_link,
     });
 
-    res.json({ message: "Password reset email sent." });
+    res.json({
+      email_sent: emailSent,
+      reset_link: emailSent ? undefined : linkData.properties.action_link,
+      message: emailSent
+        ? `Password reset email sent to ${user.email}`
+        : "The email could not be sent. Copy the set-password link and send it to them directly.",
+    });
   },
 );
 

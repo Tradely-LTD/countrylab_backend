@@ -7,7 +7,7 @@ function getTransporter() {
   if (!transporter) {
     try {
       const nodemailer = require("nodemailer");
-      transporter = nodemailer.createTransporter({
+      transporter = nodemailer.createTransport({
         host: process.env.SMTP_HOST || "smtp.gmail.com",
         port: parseInt(process.env.SMTP_PORT || "587"),
         secure: process.env.SMTP_SECURE === "true",
@@ -431,6 +431,78 @@ export async function sendRequestApprovalEmail(data: {
     return true;
   } catch (error) {
     logger.error("Failed to send approval email:", error);
+    return false;
+  }
+}
+
+export async function sendInvitationEmail(data: {
+  recipientEmail: string;
+  recipientName: string;
+  roleName: string;
+  inviterName: string;
+  setPasswordLink: string;
+}) {
+  try {
+    const transporter = getTransporter();
+    if (!transporter) {
+      logger.warn("Email transporter not available, skipping invitation email");
+      return false;
+    }
+
+    const { recipientEmail, recipientName, roleName, inviterName, setPasswordLink } = data;
+    const signInUrl = `${process.env.FRONTEND_URL || ""}/login`;
+
+    await transporter.sendMail({
+      from: `${FROM_NAME} <${FROM_EMAIL}>`,
+      to: recipientEmail,
+      subject: "You've been invited to Countrylab LMS",
+      html: `
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <style>
+            body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+            .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+            .header { background: #1e40af; color: white; padding: 30px; text-align: center; border-radius: 10px 10px 0 0; }
+            .content { background: #f9fafb; padding: 30px; border-radius: 0 0 10px 10px; }
+            .button { display: inline-block; background: #1e40af; color: white !important; padding: 14px 32px; text-decoration: none; border-radius: 8px; font-weight: bold; font-size: 15px; margin: 20px 0; }
+            .footer { text-align: center; padding: 20px; color: #6b7280; font-size: 13px; }
+            .notice { background: #eff6ff; border-left: 4px solid #1e40af; padding: 12px 16px; border-radius: 4px; font-size: 13px; margin-top: 20px; }
+          </style>
+        </head>
+        <body>
+          <div class="container">
+            <div class="header">
+              <h2 style="margin:0;">Welcome to Countrylab LMS</h2>
+              <p style="margin:6px 0 0; opacity:0.85;">Laboratory Management System</p>
+            </div>
+            <div class="content">
+              <p>Hello <strong>${recipientName}</strong>,</p>
+              <p>${inviterName} has added you to Countrylab LMS as <strong>${roleName}</strong>. Set your password to activate your account:</p>
+              <div style="text-align:center;">
+                <a href="${setPasswordLink}" class="button">Set My Password</a>
+              </div>
+              <p style="font-size:13px;color:#6b7280;">Or copy and paste this link into your browser:</p>
+              <p style="font-size:12px;word-break:break-all;color:#374151;">${setPasswordLink}</p>
+              <div class="notice">
+                After setting your password, sign in at <a href="${signInUrl}">${signInUrl}</a> with <strong>${recipientEmail}</strong>.
+                The link expires in 24 hours; if it does, ask your administrator to resend it.
+              </div>
+            </div>
+            <div class="footer">
+              <p><strong>Countrylab Laboratory</strong></p>
+              <p>This is an automated message — please do not reply.</p>
+            </div>
+          </div>
+        </body>
+        </html>
+      `,
+    });
+
+    logger.info(`Invitation email sent to ${recipientEmail}`);
+    return true;
+  } catch (error) {
+    logger.error("Failed to send invitation email:", error);
     return false;
   }
 }
