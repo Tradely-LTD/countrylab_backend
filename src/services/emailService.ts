@@ -15,6 +15,11 @@ function getTransporter() {
           user: process.env.SMTP_USER,
           pass: process.env.SMTP_PASS,
         },
+        // Fail fast: where outbound SMTP is blocked the connection otherwise
+        // hangs ~2 minutes and the invite/reset request waits with it
+        connectionTimeout: 10_000,
+        greetingTimeout: 10_000,
+        socketTimeout: 15_000,
       });
     } catch (error) {
       logger.error("Failed to initialize email transporter:", error);
