@@ -33,6 +33,7 @@ import { createClient as supabaseAdmin } from "@supabase/supabase-js";
 import bcrypt from "bcryptjs";
 import { lt } from "drizzle-orm";
 import { sendPasswordResetEmail, sendInvitationEmail } from "../services/emailService";
+import { buildSetPasswordLink } from "../utils/passwordLink";
 
 // ════════════════════════════════════════════════════════════════
 // CLIENTS ROUTER
@@ -671,16 +672,18 @@ usersRouter.post(
       await adminSupabase.auth.admin.generateLink({
         type: "recovery",
         email: body.email,
-        options: { redirectTo: `${process.env.FRONTEND_URL || ""}/reset-password` },
       });
-    if (linkData?.properties?.action_link) {
+    const setPasswordLink = linkData?.properties?.hashed_token
+      ? buildSetPasswordLink(linkData.properties.hashed_token)
+      : undefined;
+    if (setPasswordLink) {
       const roleName = (await getTenantRoles(req.tenantId!)).get(body.role)?.name ?? body.role;
       emailSent = await sendInvitationEmail({
         recipientEmail: body.email,
         recipientName: body.full_name,
         roleName,
         inviterName: req.user!.full_name,
-        setPasswordLink: linkData.properties.action_link,
+        setPasswordLink,
       });
     } else if (linkError) {
       logger.error("Invitation link generation failed:", linkError);
@@ -690,7 +693,7 @@ usersRouter.post(
       data: newUser,
       email_sent: emailSent,
       // When email isn't working, hand the admin the link to pass on directly
-      invite_link: emailSent ? undefined : linkData?.properties?.action_link,
+      invite_link: emailSent ? undefined : setPasswordLink,
       message: emailSent
         ? `Invitation sent to ${body.email}`
         : `${body.full_name} was added, but the invitation email could not be sent. Copy the set-password link and send it to them directly.`,
@@ -762,24 +765,23 @@ usersRouter.post(
       await adminSupabase.auth.admin.generateLink({
         type: "recovery",
         email: user.email,
-        options: {
-          redirectTo: `${process.env.FRONTEND_URL || ""}/reset-password`,
-        },
       });
 
-    if (error || !linkData?.properties?.action_link)
+    if (error || !linkData?.properties?.hashed_token)
       throw new AppError(400, `Failed to generate reset link: ${error?.message}`);
+
+    const resetLink = buildSetPasswordLink(linkData.properties.hashed_token);
 
     // Send the link via the project's own SMTP (branded email)
     const emailSent = await sendPasswordResetEmail({
       recipientEmail: user.email,
       recipientName: user.full_name,
-      resetLink: linkData.properties.action_link,
+      resetLink,
     });
 
     res.json({
       email_sent: emailSent,
-      reset_link: emailSent ? undefined : linkData.properties.action_link,
+      reset_link: emailSent ? undefined : resetLink,
       message: emailSent
         ? `Password reset email sent to ${user.email}`
         : "The email could not be sent. Copy the set-password link and send it to them directly.",

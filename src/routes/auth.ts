@@ -6,6 +6,8 @@ import { users } from "../db/schema";
 import { eq } from "drizzle-orm";
 import { logger } from "../utils/logger";
 import crypto from "crypto";
+import { sendPasswordResetEmail } from "../services/emailService";
+import { buildSetPasswordLink } from "../utils/passwordLink";
 
 const router = Router();
 
@@ -40,17 +42,24 @@ router.post("/forgot-password", async (req: Request, res: Response) => {
       });
     }
 
-    // Use Supabase's built-in password reset
-    const { error } = await supabase.auth.resetPasswordForEmail(email, {
-      redirectTo: `${process.env.FRONTEND_URL || "http://localhost:5173"}/reset-password`,
+    const { data: linkData, error } = await supabase.auth.admin.generateLink({
+      type: "recovery",
+      email: user.email,
     });
 
-    if (error) {
+    if (error || !linkData?.properties?.hashed_token) {
       logger.error("Supabase password reset error:", error);
-      throw error;
+      throw error ?? new Error("No reset token returned");
     }
 
-    logger.info(`Password reset email sent to: ${email}`);
+    const emailSent = await sendPasswordResetEmail({
+      recipientEmail: user.email,
+      recipientName: user.full_name,
+      resetLink: buildSetPasswordLink(linkData.properties.hashed_token),
+    });
+
+    if (emailSent) logger.info(`Password reset email sent to: ${email}`);
+    else logger.error(`Password reset email failed for: ${email}`);
 
     res.json({
       message:
@@ -83,19 +92,37 @@ router.post("/reset-password", async (req: Request, res: Response) => {
   try {
     const { token, password } = resetPasswordSchema.parse(req.body);
 
-    // Verify the token and update password using Supabase
-    const { data, error } = await supabase.auth.updateUser({
-      password: password,
+    // Throwaway client: verifyOtp signs it in as this user, and that session
+    // must not stick to the shared service-role client
+    const verifier = createClient(
+      process.env.SUPABASE_URL!,
+      process.env.SUPABASE_SERVICE_ROLE_KEY!,
+      { auth: { persistSession: false, autoRefreshToken: false } },
+    );
+    const { data: verified, error: verifyError } = await verifier.auth.verifyOtp({
+      token_hash: token,
+      type: "recovery",
+    });
+
+    if (verifyError || !verified.user) {
+      logger.error("Password reset token rejected:", verifyError);
+      return res.status(400).json({
+        error: "This link is invalid or has expired. Ask your administrator for a new one.",
+      });
+    }
+
+    const { error } = await supabase.auth.admin.updateUserById(verified.user.id, {
+      password,
     });
 
     if (error) {
       logger.error("Password reset error:", error);
       return res.status(400).json({
-        error: "Invalid or expired reset token",
+        error: `${error.message}. This link has now been used, so ask your administrator for a new one.`,
       });
     }
 
-    logger.info(`Password reset successful for user: ${data.user?.email}`);
+    logger.info(`Password reset successful for user: ${verified.user.email}`);
 
     res.json({
       message:
