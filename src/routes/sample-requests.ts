@@ -477,7 +477,18 @@ router.post(
 
       // Generate ULID for sample
       const { generateULID } = await import("../services/barcodeService");
-      const ulid = generateULID();
+      const ulid =
+        (typeof req.body.ulid === "string" && req.body.ulid.trim()) ||
+        generateULID();
+
+      const [existing] = await db
+        .select({ id: samples.id })
+        .from(samples)
+        .where(eq(samples.ulid, ulid))
+        .limit(1);
+      if (existing) {
+        throw new AppError(409, `Sample ID ${ulid} already exists`);
+      }
 
       // Create sample from request
       const [sample] = await db

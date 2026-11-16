@@ -23,6 +23,8 @@ const router = Router();
 // ─── Validation Schemas ───────────────────────────────────────────────────────
 
 const createSampleSchema = z.object({
+  // Lab-assigned sample ID, e.g. CL/901/26/DF. Stored exactly as entered.
+  ulid: z.string().trim().min(1).max(30).optional(),
   client_id: z.string().uuid(),
   name: z.string().min(1).max(255),
   description: z.string().optional(),
@@ -216,7 +218,15 @@ router.post(
 
     if (!client) throw new AppError(404, "Client not found");
 
-    const ulid = generateULID();
+    const ulid = body.ulid || generateULID();
+
+    const [existing] = await db
+      .select({ id: samples.id })
+      .from(samples)
+      .where(eq(samples.ulid, ulid))
+      .limit(1);
+    if (existing) throw new AppError(409, `Sample ID ${ulid} already exists`);
+
     const barcodeUrl = await generateBarcode(ulid);
 
     const [newSample] = await db
