@@ -11,6 +11,11 @@ import {
 import { AppError } from "../middleware/errorHandler";
 import { logger } from "../utils/logger";
 import {
+  assertSampleIdAvailable,
+  rethrowDuplicateSampleId,
+  sampleIdSchema,
+} from "../utils/sampleId";
+import {
   notifyClientRegistered,
   notifyInBackground,
   notifySampleRegistered,
@@ -475,20 +480,15 @@ router.post(
         throw new AppError(400, "Request already converted to sample");
       }
 
-      // Generate ULID for sample
-      const { generateULID } = await import("../services/barcodeService");
-      const ulid =
-        (typeof req.body.ulid === "string" && req.body.ulid.trim()) ||
-        generateULID();
-
-      const [existing] = await db
-        .select({ id: samples.id })
-        .from(samples)
-        .where(eq(samples.ulid, ulid))
-        .limit(1);
-      if (existing) {
-        throw new AppError(409, `Sample ID ${ulid} already exists`);
+      // Lab-entered Sample ID, or a generated one when none is given
+      const parsedId = sampleIdSchema.optional().safeParse(req.body.ulid || undefined);
+      if (!parsedId.success) {
+        throw new AppError(400, parsedId.error.errors[0].message);
       }
+      const { generateULID } = await import("../services/barcodeService");
+      const ulid = parsedId.data || generateULID();
+
+      await assertSampleIdAvailable(req.tenantId!, ulid);
 
       // Create sample from request
       const [sample] = await db
@@ -516,7 +516,8 @@ router.post(
           received_by: req.user!.id,
           status: "received",
         })
-        .returning();
+        .returning()
+        .catch((error) => rethrowDuplicateSampleId(error, ulid));
 
       // Update request with sample_id
       await db

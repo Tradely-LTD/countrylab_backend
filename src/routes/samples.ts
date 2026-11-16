@@ -13,6 +13,11 @@ import { AppError } from "../middleware/errorHandler";
 import { generateULID, generateBarcode } from "../services/barcodeService";
 import { logger } from "../utils/logger";
 import {
+  assertSampleIdAvailable,
+  rethrowDuplicateSampleId,
+  sampleIdSchema,
+} from "../utils/sampleId";
+import {
   notifyInBackground,
   notifySampleAssigned,
   notifySampleRegistered,
@@ -24,7 +29,7 @@ const router = Router();
 
 const createSampleSchema = z.object({
   // Lab-assigned sample ID, e.g. CL/901/26/DF. Stored exactly as entered.
-  ulid: z.string().trim().min(1).max(30).optional(),
+  ulid: sampleIdSchema.optional(),
   client_id: z.string().uuid(),
   name: z.string().min(1).max(255),
   description: z.string().optional(),
@@ -220,12 +225,7 @@ router.post(
 
     const ulid = body.ulid || generateULID();
 
-    const [existing] = await db
-      .select({ id: samples.id })
-      .from(samples)
-      .where(eq(samples.ulid, ulid))
-      .limit(1);
-    if (existing) throw new AppError(409, `Sample ID ${ulid} already exists`);
+    await assertSampleIdAvailable(req.tenantId!, ulid);
 
     const barcodeUrl = await generateBarcode(ulid);
 
@@ -260,7 +260,8 @@ router.post(
         barcode_url: barcodeUrl,
         received_by: req.user!.id,
       })
-      .returning();
+      .returning()
+      .catch((error) => rethrowDuplicateSampleId(error, ulid));
 
     await createAuditLog({
       tenant_id: req.tenantId!,
@@ -307,7 +308,8 @@ router.patch(
     if (existing.voided_at)
       throw new AppError(400, "Cannot modify a voided sample");
 
-    const body = createSampleSchema.partial().parse(req.body);
+    // The Sample ID is fixed once registered (it's on the barcode and CoA)
+    const body = createSampleSchema.omit({ ulid: true }).partial().parse(req.body);
 
     // Convert date strings to Date objects
     const updateData: any = { ...body, updated_at: new Date() };

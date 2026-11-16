@@ -285,7 +285,8 @@ export const samples = countrylabSchema.table(
     tenant_id: uuid("tenant_id")
       .references(() => tenants.id, { onDelete: "cascade" })
       .notNull(),
-    ulid: varchar("ulid", { length: 30 }).unique().notNull(),
+    // Lab-assigned Sample ID; unique per organisation (migration 0011)
+    ulid: varchar("ulid", { length: 30 }).notNull(),
     client_id: uuid("client_id")
       .references(() => clients.id)
       .notNull(),
@@ -324,6 +325,7 @@ export const samples = countrylabSchema.table(
     tenantIdx: index("samples_tenant_idx").on(t.tenant_id),
     statusIdx: index("samples_status_idx").on(t.status),
     clientIdx: index("samples_client_idx").on(t.client_id),
+    tenantUlidIdx: uniqueIndex("samples_tenant_ulid_idx").on(t.tenant_id, t.ulid),
   }),
 );
 
