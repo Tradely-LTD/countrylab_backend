@@ -28,6 +28,10 @@ import { SUPER_ADMIN } from "../lib/permissions";
 import { createAuditLog } from "../middleware/audit";
 import { logger } from "../utils/logger";
 import { AppError } from "../middleware/errorHandler";
+import {
+  notifyClientRegistered,
+  notifyInBackground,
+} from "../services/staffNotifications";
 import { computeInvoiceTotals } from "../utils/invoiceComputation";
 import { createClient as supabaseAdmin } from "@supabase/supabase-js";
 import bcrypt from "bcryptjs";
@@ -257,6 +261,13 @@ clientsRouter.post(
       table_name: "clients",
       record_id: newClient.id,
     });
+    notifyInBackground("client registered", () =>
+      notifyClientRegistered({
+        tenantId: req.tenantId!,
+        clientId: newClient.id,
+        registeredBy: req.user!.full_name,
+      }),
+    );
     res.status(201).json({ data: newClient });
   },
 );

@@ -3,7 +3,7 @@ import { logger } from "../utils/logger";
 // Email configuration - lazy load nodemailer to avoid import issues
 let transporter: any = null;
 
-function getTransporter() {
+export function getTransporter() {
   if (!transporter) {
     try {
       const nodemailer = require("nodemailer");
@@ -29,8 +29,8 @@ function getTransporter() {
   return transporter;
 }
 
-const FROM_EMAIL = process.env.FROM_EMAIL || "info@countrylab.com.ng";
-const FROM_NAME = process.env.FROM_NAME || "Countrylab Laboratory";
+export const FROM_EMAIL = process.env.FROM_EMAIL || "info@countrylab.com.ng";
+export const FROM_NAME = process.env.FROM_NAME || "Countrylab Laboratory";
 const COMPANY_EMAIL = process.env.COMPANY_EMAIL || "info@countrylab.com.ng";
 
 interface RequestConfirmationData {

@@ -319,4 +319,42 @@ router.put(
   },
 );
 
+// ─── Certificate of Analysis settings ─────────────────────────────────────────
+// Signatory block and disclaimer printed on every CoA PDF.
+
+router.get("/coa", authenticate, async (req: Request, res: Response) => {
+  const [tenant] = await db
+    .select({ settings: tenants.settings })
+    .from(tenants)
+    .where(eq(tenants.id, req.tenantId!))
+    .limit(1);
+  res.json({ data: (tenant?.settings as any)?.coa ?? {} });
+});
+
+router.put(
+  "/coa",
+  authenticate,
+  requirePermission("settings.update"),
+  async (req: Request, res: Response) => {
+    const coa = z
+      .object({
+        signatory_label: z.string().max(200).optional(),
+        signatory_name: z.string().max(200).optional(),
+        signatory_title: z.string().max(200).optional(),
+        disclaimer: z.string().max(2000).optional(),
+      })
+      .parse(req.body);
+
+    await db
+      .update(tenants)
+      .set({
+        settings: sql`coalesce(settings, '{}'::jsonb) || ${JSON.stringify({ coa })}::jsonb`,
+        updated_at: new Date(),
+      })
+      .where(eq(tenants.id, req.tenantId!));
+
+    res.json({ data: coa, message: "Certificate settings saved" });
+  },
+);
+
 export default router;

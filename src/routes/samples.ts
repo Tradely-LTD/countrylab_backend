@@ -12,6 +12,11 @@ import { createAuditLog } from "../middleware/audit";
 import { AppError } from "../middleware/errorHandler";
 import { generateULID, generateBarcode } from "../services/barcodeService";
 import { logger } from "../utils/logger";
+import {
+  notifyInBackground,
+  notifySampleAssigned,
+  notifySampleRegistered,
+} from "../services/staffNotifications";
 
 const router = Router();
 
@@ -230,6 +235,18 @@ router.post(
         storage_location: body.storage_location,
         assigned_analyst_id: body.assigned_analyst_id,
         notes: body.notes,
+        sample_container: body.sample_container,
+        sample_volume: body.sample_volume,
+        reference_standard: body.reference_standard,
+        batch_number: body.batch_number,
+        sample_condition: body.sample_condition,
+        temperature_on_receipt: body.temperature_on_receipt,
+        sampling_point: body.sampling_point,
+        production_date: body.production_date
+          ? new Date(body.production_date)
+          : null,
+        expiry_date: body.expiry_date ? new Date(body.expiry_date) : null,
+        manufacturer: body.manufacturer,
         barcode_url: barcodeUrl,
         received_by: req.user!.id,
       })
@@ -243,6 +260,14 @@ router.post(
       record_id: newSample.id,
       new_value: newSample,
     });
+
+    notifyInBackground("sample registered", () =>
+      notifySampleRegistered({
+        tenantId: req.tenantId!,
+        sampleId: newSample.id,
+        registeredBy: req.user!.full_name,
+      }),
+    );
 
     res
       .status(201)
@@ -301,6 +326,20 @@ router.patch(
       old_value: existing as Record<string, unknown>,
       new_value: updated as Record<string, unknown>,
     });
+
+    if (
+      updated.assigned_analyst_id &&
+      updated.assigned_analyst_id !== existing.assigned_analyst_id
+    ) {
+      notifyInBackground("sample assigned", () =>
+        notifySampleAssigned({
+          tenantId: req.tenantId!,
+          sampleId: updated.id,
+          analystId: updated.assigned_analyst_id!,
+          assignedBy: req.user!.full_name,
+        }),
+      );
+    }
 
     res.json({ data: updated });
   },

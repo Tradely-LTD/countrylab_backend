@@ -5,7 +5,10 @@ import { db } from "../db";
 import {
   results,
   samples,
+  clients,
   result_changes,
+  result_templates,
+  result_template_parameters,
   users,
   notifications,
   tenants,
@@ -19,9 +22,31 @@ import { AppError } from "../middleware/errorHandler";
 import { generateCoaPdf } from "../services/pdfService";
 import { generateQRCode, generateQRHash } from "../services/qrService";
 import { sendNotification } from "../services/notificationService";
+import {
+  notifyInBackground,
+  notifyResultReadyForPrinting,
+} from "../services/staffNotifications";
 import { logger } from "../utils/logger";
 import { computeParameters } from "../utils/resultComputation";
 import crypto from "crypto";
+import QRCode from "qrcode";
+
+/** Fetch an image (e.g. the org logo) as a data URL for embedding in the PDF. */
+async function imageAsDataUrl(url: string | null | undefined): Promise<string | null> {
+  if (!url) return null;
+  try {
+    const res = await fetch(url, { signal: AbortSignal.timeout(8_000) });
+    if (!res.ok) return null;
+    const type = res.headers.get("content-type") || "";
+    if (!/^image\/(png|jpe?g)/i.test(type)) return null; // jsPDF handles PNG/JPEG
+    const buf = Buffer.from(await res.arrayBuffer());
+    if (buf.length > 2_000_000) return null;
+    return `data:${type.split(";")[0]};base64,${buf.toString("base64")}`;
+  } catch (error) {
+    logger.warn("Could not load logo for certificate:", error);
+    return null;
+  }
+}
 
 const router = Router();
 
@@ -423,6 +448,14 @@ router.post(
       metadata: { action: "APPROVED", qr_hash: qrHash },
     });
 
+    notifyInBackground("result ready for printing", () =>
+      notifyResultReadyForPrinting({
+        tenantId: req.tenantId!,
+        resultId: existing.id,
+        approvedBy: req.user!.full_name,
+      }),
+    );
+
     res.json({
       data: updated,
       message: "Result approved. CoA has been generated.",
@@ -483,6 +516,145 @@ router.get("/:id/coa", authenticate, requirePermission("results.view"), async (r
 
   res.json({ data: { coa_url: result.coa_url, qr_hash: result.qr_hash } });
 });
+
+// ─── GET /results/:id/certificate (data for the CoA PDF) ──────────────────────
+// Everything the frontend needs to draw the Certificate of Analysis in the
+// company's result template layout.
+
+router.get(
+  "/:id/certificate",
+  authenticate,
+  requirePermission("results.view"),
+  async (req: Request, res: Response) => {
+    const [result] = await db
+      .select()
+      .from(results)
+      .where(
+        and(eq(results.id, req.params.id), eq(results.tenant_id, req.tenantId!)),
+      )
+      .limit(1);
+
+    if (!result) throw new AppError(404, "Result not found");
+    if (result.overall_status !== "approved")
+      throw new AppError(400, "The certificate is only available once the result is approved");
+
+    const [sample] = await db
+      .select()
+      .from(samples)
+      .where(eq(samples.id, result.sample_id))
+      .limit(1);
+    if (!sample) throw new AppError(404, "Sample not found");
+
+    const [[client], [tenant], [analyst], [approver]] = await Promise.all([
+      db.select().from(clients).where(eq(clients.id, sample.client_id)).limit(1),
+      db.select().from(tenants).where(eq(tenants.id, req.tenantId!)).limit(1),
+      db
+        .select({ full_name: users.full_name })
+        .from(users)
+        .where(eq(users.id, result.analyst_id))
+        .limit(1),
+      result.approver_id
+        ? db
+            .select({ full_name: users.full_name, role: users.role })
+            .from(users)
+            .where(eq(users.id, result.approver_id))
+            .limit(1)
+        : Promise.resolve([undefined]),
+    ]);
+
+    // Template limits and grouping are stored on the template, not the result
+    let template: { name: string; nis_standard: string | null; nis_standard_ref: string | null } | null = null;
+    const templateParams = new Map<
+      string,
+      { nis_limit: string | null; parameter_group: string | null; sequence_order: number | null }
+    >();
+    if (result.template_id) {
+      const [t] = await db
+        .select({
+          name: result_templates.name,
+          nis_standard: result_templates.nis_standard,
+          nis_standard_ref: result_templates.nis_standard_ref,
+        })
+        .from(result_templates)
+        .where(eq(result_templates.id, result.template_id))
+        .limit(1);
+      template = t ?? null;
+      const tp = await db
+        .select()
+        .from(result_template_parameters)
+        .where(eq(result_template_parameters.template_id, result.template_id));
+      for (const p of tp) {
+        templateParams.set(p.parameter_name.trim().toLowerCase(), {
+          nis_limit: p.nis_limit,
+          parameter_group: p.parameter_group,
+          sequence_order: p.sequence_order,
+        });
+      }
+    }
+
+    const parameters = ((result.parameters as any[]) || []).map((p) => {
+      const tp = templateParams.get(String(p.param_name ?? "").trim().toLowerCase());
+      return {
+        ...p,
+        nis_limit: p.nis_limit ?? tp?.nis_limit ?? null,
+        parameter_group: p.parameter_group ?? tp?.parameter_group ?? null,
+      };
+    });
+
+    const coa = ((tenant?.settings as any)?.coa ?? {}) as Record<string, string | undefined>;
+
+    const frontendBase = (process.env.FRONTEND_URL || "").split(",")[0].trim().replace(/\/+$/, "");
+    const verifyUrl = result.qr_hash ? `${frontendBase}/verify/${result.qr_hash}` : null;
+    const [qrDataUrl, logoDataUrl] = await Promise.all([
+      verifyUrl
+        ? QRCode.toDataURL(verifyUrl, { margin: 1, width: 240 }).catch(() => null)
+        : Promise.resolve(null),
+      imageAsDataUrl(tenant?.logo_url),
+    ]);
+
+    res.json({
+      data: {
+        result: {
+          id: result.id,
+          approved_at: result.approved_at,
+          created_at: result.created_at,
+          notes: result.notes,
+          qr_hash: result.qr_hash,
+          parameters,
+        },
+        sample,
+        client: client
+          ? {
+              name: client.name,
+              company: client.company,
+              address: [client.address, client.city, client.state].filter(Boolean).join(", "),
+              contact_person: client.contact_person,
+            }
+          : null,
+        template,
+        analyst: analyst ?? null,
+        approver: approver ?? null,
+        org: {
+          name: tenant?.name ?? null,
+          logo_url: tenant?.logo_url ?? null,
+          address: tenant?.address ?? null,
+          phone: tenant?.phone ?? null,
+          email: tenant?.email ?? null,
+          accreditation_number: tenant?.accreditation_number ?? null,
+          logo_data_url: logoDataUrl,
+        },
+        verify_url: verifyUrl,
+        qr_data_url: qrDataUrl,
+        coa_settings: {
+          signatory_label: coa.signatory_label || null,
+          signatory_name: coa.signatory_name || null,
+          signatory_title: coa.signatory_title || null,
+          disclaimer: coa.disclaimer || null,
+        },
+      },
+    });
+  },
+);
 
 // ─── GET /verify/:qrHash (PUBLIC — no auth) ───────────────────────────────────
 

@@ -11,6 +11,11 @@ import {
 import { AppError } from "../middleware/errorHandler";
 import { logger } from "../utils/logger";
 import {
+  notifyClientRegistered,
+  notifyInBackground,
+  notifySampleRegistered,
+} from "../services/staffNotifications";
+import {
   sendRequestConfirmation,
   sendRequestApprovalEmail,
 } from "../services/emailService";
@@ -161,6 +166,13 @@ router.post("/public", async (req: Request, res: Response) => {
           })
           .returning();
         clientId = newClient.id;
+        notifyInBackground("client registered (online request)", () =>
+          notifyClientRegistered({
+            tenantId,
+            clientId: newClient.id,
+            registeredBy: "the online sample request form",
+          }),
+        );
       }
     }
 
@@ -507,6 +519,14 @@ router.post(
 
       logger.info(
         `Request ${request.request_number} converted to sample ${ulid}`,
+      );
+
+      notifyInBackground("sample registered (from request)", () =>
+        notifySampleRegistered({
+          tenantId: req.tenantId!,
+          sampleId: sample.id,
+          registeredBy: req.user!.full_name,
+        }),
       );
 
       res.json({
