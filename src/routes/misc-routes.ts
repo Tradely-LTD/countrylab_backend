@@ -32,6 +32,7 @@ import {
   notifyClientRegistered,
   notifyInBackground,
 } from "../services/staffNotifications";
+import { sendInvoiceEmail } from "../services/clientEmails";
 import { computeInvoiceTotals } from "../utils/invoiceComputation";
 import { createClient as supabaseAdmin } from "@supabase/supabase-js";
 import bcrypt from "bcryptjs";
@@ -1306,7 +1307,20 @@ invoicesRouter.post(
       record_id: inv.id,
     });
 
-    res.status(201).json({ data: inv });
+    // Email the invoice to the client when they have an address
+    const [invClient] = await db
+      .select({ email: clients.email })
+      .from(clients)
+      .where(eq(clients.id, inv.client_id))
+      .limit(1);
+    const emailingTo = invClient?.email?.trim() || null;
+    if (emailingTo) {
+      notifyInBackground(`invoice ${inv.invoice_number} to client`, () =>
+        sendInvoiceEmail({ tenantId: req.tenantId!, invoiceId: inv.id }),
+      );
+    }
+
+    res.status(201).json({ data: inv, emailing_to: emailingTo });
   },
 );
 
@@ -1426,6 +1440,32 @@ invoicesRouter.put(
     });
 
     res.json({ data: updated });
+  },
+);
+
+// POST /invoices/:id/email — (re)send the invoice to the client
+invoicesRouter.post(
+  "/:id/email",
+  authenticate,
+  requirePermission("invoices.update"),
+  async (req: Request, res: Response) => {
+    const { to } = z
+      .object({ to: z.string().trim().max(255).optional() })
+      .parse(req.body ?? {});
+    const { sentTo } = await sendInvoiceEmail({
+      tenantId: req.tenantId!,
+      invoiceId: req.params.id,
+      to: to || undefined,
+    });
+    await createAuditLog({
+      tenant_id: req.tenantId!,
+      user_id: req.user!.id,
+      action: "UPDATE",
+      table_name: "invoices",
+      record_id: req.params.id,
+      metadata: { action: "EMAILED_TO_CLIENT", to: sentTo },
+    });
+    res.json({ data: { sent_to: sentTo }, message: `Invoice emailed to ${sentTo}` });
   },
 );
 

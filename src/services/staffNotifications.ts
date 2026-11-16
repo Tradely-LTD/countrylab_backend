@@ -36,7 +36,7 @@ export function notifyInBackground(label: string, task: () => Promise<unknown>) 
   task().catch((error) => logger.error(`Staff notification failed (${label}):`, error));
 }
 
-function esc(value: unknown): string {
+export function esc(value: unknown): string {
   return String(value ?? "")
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
@@ -45,14 +45,14 @@ function esc(value: unknown): string {
     .replace(/'/g, "&#39;");
 }
 
-function fmtDate(value: Date | string | null | undefined): string {
+export function fmtDate(value: Date | string | null | undefined): string {
   if (!value) return "";
   const d = new Date(value);
   if (Number.isNaN(d.getTime())) return "";
   return d.toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" });
 }
 
-function appLink(path: string): string {
+export function appLink(path: string): string {
   const base = (process.env.FRONTEND_URL || "http://localhost:5173")
     .split(",")[0]
     .trim()
@@ -95,12 +95,16 @@ async function labName(tenantId: string): Promise<string> {
   return t?.name || FROM_NAME;
 }
 
-function renderEmail(opts: {
+export function renderEmail(opts: {
   lab: string;
   heading: string;
   intro: string;
   sections: { title: string; rows: Row[] }[];
   link?: { href: string; label: string };
+  /** Trusted HTML placed after the sections (callers escape their own values) */
+  html?: string;
+  /** Replaces the default staff-notification footer */
+  footer?: string;
 }): string {
   const sections = opts.sections
     .map((section) => {
@@ -128,7 +132,7 @@ function renderEmail(opts: {
     : "";
 
   return `<!DOCTYPE html>
-<html><body style="margin:0;font-family:Arial,sans-serif;line-height:1.5;color:#333;background:#f3f4f6">
+<html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"></head><body style="margin:0;font-family:Arial,sans-serif;line-height:1.5;color:#333;background:#f3f4f6">
   <div style="max-width:600px;margin:0 auto;padding:20px">
     <div style="background:#1f2937;color:#fff;padding:20px 24px;border-radius:8px 8px 0 0">
       <div style="font-size:12px;opacity:.75;text-transform:uppercase;letter-spacing:1px">${esc(opts.lab)}</div>
@@ -137,9 +141,10 @@ function renderEmail(opts: {
     <div style="background:#f9fafb;padding:24px;border-radius:0 0 8px 8px">
       <p style="margin:0">${esc(opts.intro)}</p>
       ${sections}
+      ${opts.html ?? ""}
       ${button}
       <p style="margin-top:28px;padding-top:16px;border-top:1px solid #e5e7eb;color:#9ca3af;font-size:12px">
-        Automated notification from ${esc(opts.lab)} LMS. Please do not reply to this email.
+        ${opts.footer ?? `Automated notification from ${esc(opts.lab)} LMS. Please do not reply to this email.`}
       </p>
     </div>
   </div>

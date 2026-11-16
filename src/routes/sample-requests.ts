@@ -231,6 +231,7 @@ router.post("/public", async (req: Request, res: Response) => {
 
     // Send confirmation emails (don't wait for completion)
     sendRequestConfirmation({
+      tenantId,
       requestNumber,
       clientName: body.client_name || "Customer",
       clientEmail: body.client_email!,
@@ -436,6 +437,7 @@ router.put(
 
         if (requestWithClient?.client?.email) {
           sendRequestApprovalEmail({
+            tenantId: req.tenantId!,
             requestNumber: updated.request_number,
             clientName: requestWithClient.client.name,
             clientEmail: requestWithClient.client.email,

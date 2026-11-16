@@ -6,12 +6,20 @@ import { logger } from "../utils/logger";
 // that block outbound SMTP ports. Both expose the same sendMail() shape so
 // every caller stays provider-agnostic.
 
+export interface MailAttachment {
+  filename: string;
+  /** Base64-encoded file content */
+  content: string;
+  contentType?: string;
+}
+
 export interface MailMessage {
   from: string;
   to: string | string[];
   subject: string;
   html: string;
   replyTo?: string;
+  attachments?: MailAttachment[];
 }
 
 export interface MailTransport {
@@ -22,7 +30,7 @@ const RESEND_ENDPOINT = "https://api.resend.com/emails";
 
 function createResendTransport(apiKey: string): MailTransport {
   return {
-    async sendMail({ from, to, subject, html, replyTo }) {
+    async sendMail({ from, to, subject, html, replyTo, attachments }) {
       const res = await fetch(RESEND_ENDPOINT, {
         method: "POST",
         headers: {
@@ -35,6 +43,15 @@ function createResendTransport(apiKey: string): MailTransport {
           subject,
           html,
           ...(replyTo ? { reply_to: replyTo } : {}),
+          ...(attachments?.length
+            ? {
+                attachments: attachments.map((a) => ({
+                  filename: a.filename,
+                  content: a.content,
+                  ...(a.contentType ? { content_type: a.contentType } : {}),
+                })),
+              }
+            : {}),
         }),
         // Fail fast rather than holding the request open
         signal: AbortSignal.timeout(15_000),
@@ -74,6 +91,19 @@ export function getTransporter(): MailTransport | null {
         greetingTimeout: 10_000,
         socketTimeout: 15_000,
       });
+      const smtp = transporter as any;
+      transporter = {
+        sendMail: (m: MailMessage) =>
+          smtp.sendMail({
+            ...m,
+            attachments: m.attachments?.map((a) => ({
+              filename: a.filename,
+              content: a.content,
+              encoding: "base64",
+              contentType: a.contentType,
+            })),
+          }),
+      };
       logger.info("Email provider: SMTP");
     } catch (error) {
       logger.error("Failed to initialize email transporter:", error);
@@ -87,7 +117,80 @@ export const FROM_EMAIL = process.env.FROM_EMAIL || "info@countrylab.com.ng";
 export const FROM_NAME = process.env.FROM_NAME || "Countrylab Laboratory";
 const COMPANY_EMAIL = process.env.COMPANY_EMAIL || "info@countrylab.com.ng";
 
+// ─── Organisation details for client-facing emails ────────────────────────────
+
+export interface BankAccount {
+  bank_name: string;
+  account_name: string;
+  account_number: string;
+  label?: string;
+  is_active?: boolean;
+}
+
+export interface OrgDetails {
+  name: string;
+  phone: string | null;
+  email: string | null;
+  address: string | null;
+  bankAccounts: BankAccount[];
+}
+
+export async function getOrgDetails(tenantId: string): Promise<OrgDetails> {
+  const { db } = await import("../db");
+  const { tenants } = await import("../db/schema");
+  const { eq } = await import("drizzle-orm");
+  const [t] = await db.select().from(tenants).where(eq(tenants.id, tenantId)).limit(1);
+  const accounts = ((t?.settings as any)?.bank_accounts ?? []) as BankAccount[];
+  return {
+    name: t?.name || FROM_NAME,
+    phone: t?.phone || null,
+    email: t?.email || null,
+    address: t?.address || null,
+    bankAccounts: accounts.filter((a) => a && a.is_active !== false && a.account_number),
+  };
+}
+
+function escHtml(v: unknown): string {
+  return String(v ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+/** Bank account list for payment instructions, from Settings → Bank Accounts. */
+export function bankDetailsHtml(org: OrgDetails, reference: string): string {
+  if (org.bankAccounts.length === 0) {
+    return `<p>Please contact us${org.phone ? ` on ${escHtml(org.phone)}` : ""}${
+      org.email ? ` or at ${escHtml(org.email)}` : ""
+    } for payment details, quoting <strong>${escHtml(reference)}</strong>.</p>`;
+  }
+  const blocks = org.bankAccounts
+    .map(
+      (a) => `
+      <ul style="margin:8px 0;padding-left:20px">
+        ${a.label ? `<li><strong>${escHtml(a.label)}</strong></li>` : ""}
+        <li><strong>Bank:</strong> ${escHtml(a.bank_name)}</li>
+        <li><strong>Account Name:</strong> ${escHtml(a.account_name)}</li>
+        <li><strong>Account Number:</strong> ${escHtml(a.account_number)}</li>
+      </ul>`,
+    )
+    .join("");
+  return `<p>Please make payment to:</p>${blocks}<p>Please use <strong>${escHtml(reference)}</strong> as the payment reference.</p>`;
+}
+
+/** "Email: … | Phone: …" line, leaving out whatever isn't set. */
+function contactLine(org: OrgDetails): string {
+  return [
+    `Email: ${escHtml(org.email || FROM_EMAIL)}`,
+    org.phone ? `Phone: ${escHtml(org.phone)}` : null,
+  ]
+    .filter(Boolean)
+    .join(" | ");
+}
+
 interface RequestConfirmationData {
+  tenantId: string;
   requestNumber: string;
   clientName: string;
   clientEmail: string;
@@ -105,6 +208,7 @@ export async function sendRequestConfirmation(data: RequestConfirmationData) {
       return false;
     }
 
+    const org = await getOrgDetails(data.tenantId);
     const {
       requestNumber,
       clientName,
@@ -119,11 +223,13 @@ export async function sendRequestConfirmation(data: RequestConfirmationData) {
     const clientEmailContent = {
       from: `${FROM_NAME} <${FROM_EMAIL}>`,
       to: clientEmail,
+      replyTo: org.email || undefined,
       subject: `Request Confirmation - ${requestNumber}`,
       html: `
         <!DOCTYPE html>
         <html>
         <head>
+          <meta charset="UTF-8">
           <style>
             body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
             .container { max-width: 600px; margin: 0 auto; padding: 20px; }
@@ -180,13 +286,13 @@ export async function sendRequestConfirmation(data: RequestConfirmationData) {
               <p>If you have any questions, please don't hesitate to contact us.</p>
               
               <div style="text-align: center;">
-                <a href="mailto:${FROM_EMAIL}" class="button">Contact Us</a>
+                <a href="mailto:${org.email || FROM_EMAIL}" class="button">Contact Us</a>
               </div>
             </div>
             <div class="footer">
               <p><strong>Countrylab Laboratory</strong></p>
               <p>ISO 17025 Accredited Laboratory</p>
-              <p>Email: ${FROM_EMAIL} | Phone: +234 XXX XXX XXXX</p>
+              <p>${contactLine(org)}</p>
               <p style="font-size: 12px; color: #9ca3af;">This is an automated message. Please do not reply directly to this email.</p>
             </div>
           </div>
@@ -201,11 +307,13 @@ export async function sendRequestConfirmation(data: RequestConfirmationData) {
       representativeEmailContent = {
         from: `${FROM_NAME} <${FROM_EMAIL}>`,
         to: representativeEmail,
+        replyTo: org.email || undefined,
         subject: `Request Confirmation - ${requestNumber}`,
         html: `
           <!DOCTYPE html>
           <html>
           <head>
+            <meta charset="UTF-8">
             <style>
               body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
               .container { max-width: 600px; margin: 0 auto; padding: 20px; }
@@ -231,7 +339,7 @@ export async function sendRequestConfirmation(data: RequestConfirmationData) {
               </div>
               <div class="footer">
                 <p><strong>Countrylab Laboratory</strong></p>
-                <p>Email: ${FROM_EMAIL}</p>
+                <p>${contactLine(org)}</p>
               </div>
             </div>
           </body>
@@ -249,6 +357,7 @@ export async function sendRequestConfirmation(data: RequestConfirmationData) {
         <!DOCTYPE html>
         <html>
         <head>
+          <meta charset="UTF-8">
           <style>
             body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
             .container { max-width: 600px; margin: 0 auto; padding: 20px; }
@@ -368,6 +477,7 @@ export async function sendPasswordResetEmail(data: {
         <!DOCTYPE html>
         <html>
         <head>
+          <meta charset="UTF-8">
           <style>
             body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
             .container { max-width: 600px; margin: 0 auto; padding: 20px; }
@@ -415,6 +525,7 @@ export async function sendPasswordResetEmail(data: {
 }
 
 export async function sendRequestApprovalEmail(data: {
+  tenantId: string;
   requestNumber: string;
   clientName: string;
   clientEmail: string;
@@ -428,15 +539,18 @@ export async function sendRequestApprovalEmail(data: {
     }
 
     const { requestNumber, clientName, clientEmail, quotationAmount } = data;
+    const org = await getOrgDetails(data.tenantId);
 
     const emailContent = {
       from: `${FROM_NAME} <${FROM_EMAIL}>`,
       to: clientEmail,
+      replyTo: org.email || undefined,
       subject: `Request Approved - Quotation for ${requestNumber}`,
       html: `
         <!DOCTYPE html>
         <html>
         <head>
+          <meta charset="UTF-8">
           <style>
             body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
             .container { max-width: 600px; margin: 0 auto; padding: 20px; }
@@ -463,21 +577,15 @@ export async function sendRequestApprovalEmail(data: {
               </div>
               
               <h3>Payment Instructions:</h3>
-              <p>Please make payment to:</p>
-              <ul>
-                <li><strong>Bank:</strong> [Your Bank Name]</li>
-                <li><strong>Account Name:</strong> Countrylab Laboratory</li>
-                <li><strong>Account Number:</strong> [Account Number]</li>
-                <li><strong>Reference:</strong> ${requestNumber}</li>
-              </ul>
+              ${bankDetailsHtml(org, requestNumber)}
               
-              <p>After payment, please send proof of payment to ${FROM_EMAIL} with your request number.</p>
+              <p>After payment, please send proof of payment to ${org.email || FROM_EMAIL} with your request number.</p>
               
               <p>Once payment is confirmed, we will schedule sample collection or provide drop-off instructions.</p>
             </div>
             <div class="footer">
               <p><strong>Countrylab Laboratory</strong></p>
-              <p>Email: ${FROM_EMAIL}</p>
+              <p>${contactLine(org)}</p>
             </div>
           </div>
         </body>
@@ -519,6 +627,7 @@ export async function sendInvitationEmail(data: {
         <!DOCTYPE html>
         <html>
         <head>
+          <meta charset="UTF-8">
           <style>
             body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
             .container { max-width: 600px; margin: 0 auto; padding: 20px; }

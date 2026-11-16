@@ -26,6 +26,7 @@ import {
   notifyInBackground,
   notifyResultReadyForPrinting,
 } from "../services/staffNotifications";
+import { sendResultToClient } from "../services/clientEmails";
 import { logger } from "../utils/logger";
 import { computeParameters } from "../utils/resultComputation";
 import crypto from "crypto";
@@ -628,6 +629,7 @@ router.get(
               name: client.name,
               company: client.company,
               address: [client.address, client.city, client.state].filter(Boolean).join(", "),
+              email: client.email,
               contact_person: client.contact_person,
             }
           : null,
@@ -653,6 +655,44 @@ router.get(
         },
       },
     });
+  },
+);
+
+// ─── POST /results/:id/send-to-client ─────────────────────────────────────────
+// The browser builds the CoA PDF (same as the download) and posts it here to be
+// emailed to the client as an attachment.
+
+router.post(
+  "/:id/send-to-client",
+  authenticate,
+  requirePermission("results.send"),
+  async (req: Request, res: Response) => {
+    const body = z
+      .object({
+        to: z.string().trim().max(255).optional(),
+        message: z.string().max(2000).optional(),
+        pdf_base64: z.string().min(1, "The certificate PDF is required"),
+      })
+      .parse(req.body);
+
+    const { sentTo, sampleId } = await sendResultToClient({
+      tenantId: req.tenantId!,
+      resultId: req.params.id,
+      to: body.to || undefined,
+      pdfBase64: body.pdf_base64,
+      message: body.message,
+    });
+
+    await createAuditLog({
+      tenant_id: req.tenantId!,
+      user_id: req.user!.id,
+      action: "UPDATE",
+      table_name: "results",
+      record_id: req.params.id,
+      metadata: { action: "COA_EMAILED_TO_CLIENT", to: sentTo, sample: sampleId },
+    });
+
+    res.json({ data: { sent_to: sentTo }, message: `Certificate emailed to ${sentTo}` });
   },
 );
 

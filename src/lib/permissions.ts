@@ -39,6 +39,7 @@ export const PERMISSION_CATALOG = [
       update: "Edit / submit",
       delete: "Delete",
       approve: "Approve / reject",
+      send: "Email certificate to client",
     },
   },
   {
@@ -202,6 +203,7 @@ const DEFAULT_GRANTS: Record<string, string[]> = {
   "results.update": LAB,
   "results.delete": LAB,
   "results.approve": ["md", "lab_manager"],
+  "results.send": ["md", "lab_manager", "secretary"],
 
   "templates.view": STAFF,
   "templates.create": ["md", "quality_manager", "lab_manager"],
