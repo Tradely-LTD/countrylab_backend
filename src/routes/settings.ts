@@ -4,6 +4,7 @@ import { eq, sql } from "drizzle-orm";
 import { db } from "../db";
 import { tenants } from "../db/schema";
 import { authenticate, requirePermission } from "../middleware/auth";
+import { sampleIdPrefixSchema } from "../utils/sampleId";
 import { AppError } from "../middleware/errorHandler";
 import multer from "multer";
 import path from "path";
@@ -117,9 +118,17 @@ router.put(
       phone: z.string().optional(),
       email: z.string().email().optional().or(z.literal("")),
       accreditation_number: z.string().optional(),
+      // Required start of every Sample ID, e.g. "CL/". Empty turns it off.
+      sample_id_prefix: sampleIdPrefixSchema.optional(),
     });
 
-    const body = schema.parse(req.body);
+    const { sample_id_prefix, ...body } = schema.parse(req.body);
+    const settingsPatch =
+      sample_id_prefix === undefined
+        ? {}
+        : {
+            settings: sql`coalesce(settings, '{}'::jsonb) || ${JSON.stringify({ sample_id_prefix })}::jsonb`,
+          };
 
     // Check if tenant exists first
     const [existing] = await db
@@ -132,7 +141,7 @@ router.put(
     if (existing) {
       const [updated] = await db
         .update(tenants)
-        .set({ ...body, updated_at: new Date() })
+        .set({ ...body, ...settingsPatch, updated_at: new Date() })
         .where(eq(tenants.id, req.tenantId!))
         .returning();
       result = updated;
@@ -155,7 +164,12 @@ router.put(
 
       const [created] = await db
         .insert(tenants)
-        .values({ id: req.tenantId!, slug, ...body })
+        .values({
+          id: req.tenantId!,
+          slug,
+          ...body,
+          ...(sample_id_prefix !== undefined ? { settings: { sample_id_prefix } } : {}),
+        })
         .returning();
       result = created;
     }

@@ -12,6 +12,7 @@ import { AppError } from "../middleware/errorHandler";
 import { logger } from "../utils/logger";
 import {
   assertSampleIdAvailable,
+  resolveSampleId,
   rethrowDuplicateSampleId,
   sampleIdSchema,
 } from "../utils/sampleId";
@@ -486,7 +487,7 @@ router.post(
         throw new AppError(400, parsedId.error.errors[0].message);
       }
       const { generateULID } = await import("../services/barcodeService");
-      const ulid = parsedId.data || generateULID();
+      const ulid = await resolveSampleId(req.tenantId!, parsedId.data, generateULID);
 
       await assertSampleIdAvailable(req.tenantId!, ulid);
 

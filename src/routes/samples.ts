@@ -14,6 +14,7 @@ import { generateULID, generateBarcode } from "../services/barcodeService";
 import { logger } from "../utils/logger";
 import {
   assertSampleIdAvailable,
+  resolveSampleId,
   rethrowDuplicateSampleId,
   sampleIdSchema,
 } from "../utils/sampleId";
@@ -223,7 +224,7 @@ router.post(
 
     if (!client) throw new AppError(404, "Client not found");
 
-    const ulid = body.ulid || generateULID();
+    const ulid = await resolveSampleId(req.tenantId!, body.ulid, generateULID);
 
     await assertSampleIdAvailable(req.tenantId!, ulid);
 
