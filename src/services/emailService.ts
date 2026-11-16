@@ -1,9 +1,62 @@
 import { logger } from "../utils/logger";
 
-// Email configuration - lazy load nodemailer to avoid import issues
-let transporter: any = null;
+// ─── Email delivery ───────────────────────────────────────────────────────────
+// Sends through Resend's HTTP API when RESEND_API_KEY is set, otherwise falls
+// back to SMTP. Resend goes over HTTPS, so it works on hosts (e.g. Railway)
+// that block outbound SMTP ports. Both expose the same sendMail() shape so
+// every caller stays provider-agnostic.
 
-export function getTransporter() {
+export interface MailMessage {
+  from: string;
+  to: string | string[];
+  subject: string;
+  html: string;
+  replyTo?: string;
+}
+
+export interface MailTransport {
+  sendMail(message: MailMessage): Promise<unknown>;
+}
+
+const RESEND_ENDPOINT = "https://api.resend.com/emails";
+
+function createResendTransport(apiKey: string): MailTransport {
+  return {
+    async sendMail({ from, to, subject, html, replyTo }) {
+      const res = await fetch(RESEND_ENDPOINT, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          from,
+          to: Array.isArray(to) ? to : [to],
+          subject,
+          html,
+          ...(replyTo ? { reply_to: replyTo } : {}),
+        }),
+        // Fail fast rather than holding the request open
+        signal: AbortSignal.timeout(15_000),
+      });
+      const body: any = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(
+          `Resend rejected the email (${res.status}): ${body?.message || body?.name || res.statusText}`,
+        );
+      }
+      return body; // { id }
+    },
+  };
+}
+
+let transporter: MailTransport | null = null;
+
+export function getTransporter(): MailTransport | null {
+  if (!transporter && process.env.RESEND_API_KEY) {
+    transporter = createResendTransport(process.env.RESEND_API_KEY);
+    logger.info("Email provider: Resend");
+  }
   if (!transporter) {
     try {
       const nodemailer = require("nodemailer");
@@ -21,6 +74,7 @@ export function getTransporter() {
         greetingTimeout: 10_000,
         socketTimeout: 15_000,
       });
+      logger.info("Email provider: SMTP");
     } catch (error) {
       logger.error("Failed to initialize email transporter:", error);
       return null;
