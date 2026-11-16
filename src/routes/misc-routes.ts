@@ -691,6 +691,7 @@ usersRouter.post(
     if (setPasswordLink) {
       const roleName = (await getTenantRoles(req.tenantId!)).get(body.role)?.name ?? body.role;
       emailSent = await sendInvitationEmail({
+        tenantId: req.tenantId!,
         recipientEmail: body.email,
         recipientName: body.full_name,
         roleName,
@@ -786,6 +787,7 @@ usersRouter.post(
 
     // Send the link via the project's own SMTP (branded email)
     const emailSent = await sendPasswordResetEmail({
+      tenantId: req.tenantId!,
       recipientEmail: user.email,
       recipientName: user.full_name,
       resetLink,

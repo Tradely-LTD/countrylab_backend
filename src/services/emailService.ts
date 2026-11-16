@@ -132,6 +132,7 @@ export interface OrgDetails {
   phone: string | null;
   email: string | null;
   address: string | null;
+  logoUrl: string | null;
   bankAccounts: BankAccount[];
 }
 
@@ -146,8 +147,31 @@ export async function getOrgDetails(tenantId: string): Promise<OrgDetails> {
     phone: t?.phone || null,
     email: t?.email || null,
     address: t?.address || null,
+    logoUrl: t?.logo_url && /^https:\/\//.test(t.logo_url) ? t.logo_url : null,
     bankAccounts: accounts.filter((a) => a && a.is_active !== false && a.account_number),
   };
+}
+
+/**
+ * White logo bar placed above an email's coloured header. Loaded from the
+ * organisation's public logo URL (Settings → Organization logo); email clients
+ * block embedded data: images, so a hosted URL is what reliably displays.
+ */
+export function emailLogoHtml(logoUrl: string | null | undefined, name: string): string {
+  if (!logoUrl) return "";
+  return `<div class="brand" style="background:#ffffff;padding:16px 24px;border-radius:10px 10px 0 0;border-bottom:3px solid #1e40af;text-align:left">
+    <img src="${escHtml(logoUrl)}" alt="${escHtml(name)}" height="48" style="height:48px;max-width:220px;width:auto;display:block;border:0;outline:none" />
+  </div>`;
+}
+
+async function orgOrNull(tenantId?: string): Promise<OrgDetails | null> {
+  if (!tenantId) return null;
+  try {
+    return await getOrgDetails(tenantId);
+  } catch (error) {
+    logger.warn("Could not load organisation details for email:", error);
+    return null;
+  }
 }
 
 function escHtml(v: unknown): string {
@@ -231,6 +255,7 @@ export async function sendRequestConfirmation(data: RequestConfirmationData) {
         <head>
           <meta charset="UTF-8">
           <style>
+            .brand + .header { border-radius: 0 !important; }
             body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
             .container { max-width: 600px; margin: 0 auto; padding: 20px; }
             .header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 30px; text-align: center; border-radius: 10px 10px 0 0; }
@@ -246,6 +271,7 @@ export async function sendRequestConfirmation(data: RequestConfirmationData) {
         </head>
         <body>
           <div class="container">
+            ${emailLogoHtml(org?.logoUrl, org?.name || FROM_NAME)}
             <div class="header">
               <h1>Request Received!</h1>
               <p>Thank you for choosing Countrylab Laboratory</p>
@@ -315,6 +341,7 @@ export async function sendRequestConfirmation(data: RequestConfirmationData) {
           <head>
             <meta charset="UTF-8">
             <style>
+              .brand + .header { border-radius: 0 !important; }
               body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
               .container { max-width: 600px; margin: 0 auto; padding: 20px; }
               .header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 30px; text-align: center; border-radius: 10px 10px 0 0; }
@@ -325,6 +352,7 @@ export async function sendRequestConfirmation(data: RequestConfirmationData) {
           </head>
           <body>
             <div class="container">
+            ${emailLogoHtml(org?.logoUrl, org?.name || FROM_NAME)}
               <div class="header">
                 <h1>Request Received!</h1>
               </div>
@@ -359,6 +387,7 @@ export async function sendRequestConfirmation(data: RequestConfirmationData) {
         <head>
           <meta charset="UTF-8">
           <style>
+            .brand + .header { border-radius: 0 !important; }
             body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
             .container { max-width: 600px; margin: 0 auto; padding: 20px; }
             .header { background: #1f2937; color: white; padding: 20px; border-radius: 8px 8px 0 0; }
@@ -371,6 +400,7 @@ export async function sendRequestConfirmation(data: RequestConfirmationData) {
         </head>
         <body>
           <div class="container">
+            ${emailLogoHtml(org?.logoUrl, org?.name || FROM_NAME)}
             <div class="header">
               <h2 style="margin: 0;">🔔 New Sample Request</h2>
               <p style="margin: 5px 0 0 0; opacity: 0.9;">Action Required</p>
@@ -456,6 +486,7 @@ export async function sendRequestConfirmation(data: RequestConfirmationData) {
 }
 
 export async function sendPasswordResetEmail(data: {
+  tenantId?: string;
   recipientEmail: string;
   recipientName: string;
   resetLink: string;
@@ -468,6 +499,7 @@ export async function sendPasswordResetEmail(data: {
     }
 
     const { recipientEmail, recipientName, resetLink } = data;
+    const org = await orgOrNull(data.tenantId);
 
     await transporter.sendMail({
       from: `${FROM_NAME} <${FROM_EMAIL}>`,
@@ -479,6 +511,7 @@ export async function sendPasswordResetEmail(data: {
         <head>
           <meta charset="UTF-8">
           <style>
+            .brand + .header { border-radius: 0 !important; }
             body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
             .container { max-width: 600px; margin: 0 auto; padding: 20px; }
             .header { background: #1e40af; color: white; padding: 30px; text-align: center; border-radius: 10px 10px 0 0; }
@@ -490,6 +523,7 @@ export async function sendPasswordResetEmail(data: {
         </head>
         <body>
           <div class="container">
+            ${emailLogoHtml(org?.logoUrl, org?.name || FROM_NAME)}
             <div class="header">
               <h2 style="margin:0;">Password Reset Request</h2>
               <p style="margin:6px 0 0; opacity:0.85;">Countrylab LMS</p>
@@ -552,6 +586,7 @@ export async function sendRequestApprovalEmail(data: {
         <head>
           <meta charset="UTF-8">
           <style>
+            .brand + .header { border-radius: 0 !important; }
             body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
             .container { max-width: 600px; margin: 0 auto; padding: 20px; }
             .header { background: linear-gradient(135deg, #10b981 0%, #059669 100%); color: white; padding: 30px; text-align: center; border-radius: 10px 10px 0 0; }
@@ -563,6 +598,7 @@ export async function sendRequestApprovalEmail(data: {
         </head>
         <body>
           <div class="container">
+            ${emailLogoHtml(org?.logoUrl, org?.name || FROM_NAME)}
             <div class="header">
               <h1>✓ Request Approved!</h1>
               <p>Your quotation is ready</p>
@@ -603,6 +639,7 @@ export async function sendRequestApprovalEmail(data: {
 }
 
 export async function sendInvitationEmail(data: {
+  tenantId?: string;
   recipientEmail: string;
   recipientName: string;
   roleName: string;
@@ -617,6 +654,7 @@ export async function sendInvitationEmail(data: {
     }
 
     const { recipientEmail, recipientName, roleName, inviterName, setPasswordLink } = data;
+    const org = await orgOrNull(data.tenantId);
     const signInUrl = `${process.env.FRONTEND_URL || ""}/login`;
 
     await transporter.sendMail({
@@ -629,6 +667,7 @@ export async function sendInvitationEmail(data: {
         <head>
           <meta charset="UTF-8">
           <style>
+            .brand + .header { border-radius: 0 !important; }
             body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
             .container { max-width: 600px; margin: 0 auto; padding: 20px; }
             .header { background: #1e40af; color: white; padding: 30px; text-align: center; border-radius: 10px 10px 0 0; }
@@ -640,6 +679,7 @@ export async function sendInvitationEmail(data: {
         </head>
         <body>
           <div class="container">
+            ${emailLogoHtml(org?.logoUrl, org?.name || FROM_NAME)}
             <div class="header">
               <h2 style="margin:0;">Welcome to Countrylab LMS</h2>
               <p style="margin:6px 0 0; opacity:0.85;">Laboratory Management System</p>

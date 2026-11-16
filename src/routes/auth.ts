@@ -53,6 +53,7 @@ router.post("/forgot-password", async (req: Request, res: Response) => {
     }
 
     const emailSent = await sendPasswordResetEmail({
+      tenantId: user.tenant_id,
       recipientEmail: user.email,
       recipientName: user.full_name,
       resetLink: buildSetPasswordLink(linkData.properties.hashed_token),

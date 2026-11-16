@@ -14,7 +14,7 @@ import { and, eq, inArray } from "drizzle-orm";
 import { db } from "../db";
 import { clients, results, samples, tenants, users } from "../db/schema";
 import { logger } from "../utils/logger";
-import { FROM_EMAIL, FROM_NAME, getTransporter } from "./emailService";
+import { FROM_EMAIL, FROM_NAME, emailLogoHtml, getTransporter } from "./emailService";
 import { sendNotification } from "./notificationService";
 
 export const MANAGEMENT_ROLES = ["operations_manager", "general_manager", "md"];
@@ -86,17 +86,22 @@ function uniqueStaff(...groups: Staff[][]): Staff[] {
   return [...seen.values()];
 }
 
-async function labName(tenantId: string): Promise<string> {
+async function labBrand(tenantId: string): Promise<{ lab: string; logoUrl: string | null }> {
   const [t] = await db
-    .select({ name: tenants.name })
+    .select({ name: tenants.name, logo_url: tenants.logo_url })
     .from(tenants)
     .where(eq(tenants.id, tenantId))
     .limit(1);
-  return t?.name || FROM_NAME;
+  return {
+    lab: t?.name || FROM_NAME,
+    logoUrl: t?.logo_url && /^https:\/\//.test(t.logo_url) ? t.logo_url : null,
+  };
 }
 
 export function renderEmail(opts: {
   lab: string;
+  /** Public URL of the organisation logo, shown above the header */
+  logoUrl?: string | null;
   heading: string;
   intro: string;
   sections: { title: string; rows: Row[] }[];
@@ -134,7 +139,8 @@ export function renderEmail(opts: {
   return `<!DOCTYPE html>
 <html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"></head><body style="margin:0;font-family:Arial,sans-serif;line-height:1.5;color:#333;background:#f3f4f6">
   <div style="max-width:600px;margin:0 auto;padding:20px">
-    <div style="background:#1f2937;color:#fff;padding:20px 24px;border-radius:8px 8px 0 0">
+    ${emailLogoHtml(opts.logoUrl, opts.lab)}
+    <div style="background:#1f2937;color:#fff;padding:20px 24px;border-radius:${opts.logoUrl ? "0" : "8px 8px 0 0"}">
       <div style="font-size:12px;opacity:.75;text-transform:uppercase;letter-spacing:1px">${esc(opts.lab)}</div>
       <h2 style="margin:4px 0 0;font-size:20px">${esc(opts.heading)}</h2>
     </div>
@@ -252,10 +258,11 @@ export async function notifyClientRegistered(params: {
     .limit(1);
   if (!client) return;
 
-  const lab = await labName(params.tenantId);
+  const { lab, logoUrl } = await labBrand(params.tenantId);
   const recipients = uniqueStaff(await staffByRoles(params.tenantId, MANAGEMENT_ROLES));
   const html = renderEmail({
     lab,
+    logoUrl,
     heading: "New Client Registered",
     intro: `A new client has been registered${params.registeredBy ? ` by ${params.registeredBy}` : ""}.`,
     sections: [
@@ -290,13 +297,14 @@ export async function notifySampleRegistered(params: {
   const loaded = await loadSample(params.tenantId, params.sampleId);
   if (!loaded) return;
   const { sample, client, analystName } = loaded;
-  const lab = await labName(params.tenantId);
+  const { lab, logoUrl } = await labBrand(params.tenantId);
   const by = params.registeredBy ? ` by ${params.registeredBy}` : "";
   const link = { href: appLink(`/samples/${sample.id}`), label: "Open Sample" };
 
   const management = uniqueStaff(await staffByRoles(params.tenantId, MANAGEMENT_ROLES));
   const managementHtml = renderEmail({
     lab,
+    logoUrl,
     heading: "New Sample Registered",
     intro: `A new sample has been registered${by}.`,
     sections: [
@@ -309,6 +317,7 @@ export async function notifySampleRegistered(params: {
   const labStaff = uniqueStaff(await staffByRoles(params.tenantId, LAB_ROLES));
   const labHtml = renderEmail({
     lab,
+    logoUrl,
     heading: "New Sample for Analysis",
     intro: `A new sample has been registered for laboratory analysis${by}.`,
     sections: [{ title: "Sample Information", rows: sampleRows(sample, analystName) }],
@@ -340,7 +349,7 @@ export async function notifySampleAssigned(params: {
   const loaded = await loadSample(params.tenantId, params.sampleId);
   if (!loaded) return;
   const { sample, analystName } = loaded;
-  const lab = await labName(params.tenantId);
+  const { lab, logoUrl } = await labBrand(params.tenantId);
 
   const recipients = uniqueStaff(
     await staffByIds(params.tenantId, [params.analystId]),
@@ -348,6 +357,7 @@ export async function notifySampleAssigned(params: {
   );
   const html = renderEmail({
     lab,
+    logoUrl,
     heading: "Sample Assigned for Analysis",
     intro: `Sample ${sample.ulid} has been assigned to ${analystName || "an analyst"}${
       params.assignedBy ? ` by ${params.assignedBy}` : ""
@@ -385,11 +395,12 @@ export async function notifyResultReadyForPrinting(params: {
   const loaded = await loadSample(params.tenantId, result.sample_id);
   if (!loaded) return;
   const { sample, client } = loaded;
-  const lab = await labName(params.tenantId);
+  const { lab, logoUrl } = await labBrand(params.tenantId);
 
   const recipients = uniqueStaff(await staffByRoles(params.tenantId, SECRETARY_ROLES));
   const html = renderEmail({
     lab,
+    logoUrl,
     heading: "Result Approved – Ready for Printing",
     intro:
       "The final analysis and result approval have been completed. The Certificate of Analysis is ready for printing.",

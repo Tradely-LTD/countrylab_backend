@@ -128,6 +128,7 @@ export function buildInvoiceEmailHtml({
 
   return renderEmail({
     lab: org.name,
+    logoUrl: org.logoUrl,
     heading: `Invoice ${invoice.invoice_number}`,
     intro: `Dear ${client?.contact_person || client?.name || "Customer"}, please find below your invoice from ${org.name}.`,
     sections: [
@@ -211,6 +212,7 @@ export async function sendResultToClient(params: {
 
   const html = renderEmail({
     lab: org.name,
+    logoUrl: org.logoUrl,
     heading: "Your Certificate of Analysis",
     intro: `Dear ${client?.contact_person || client?.name || "Customer"}, the analysis of your sample is complete. Your Certificate of Analysis is attached to this email.`,
     sections: [
