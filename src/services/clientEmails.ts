@@ -17,15 +17,16 @@ import {
   getTransporter,
   type OrgDetails,
 } from "./emailService";
-import { esc, fmtDate, renderEmail } from "./staffNotifications";
+import { fmtDate, renderEmail } from "./staffNotifications";
+import { esc, itemsTable, notice, orgFooter, paragraph, sectionTitle } from "./emailLayout";
 
 const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
 
 function clientFooter(org: OrgDetails): string {
-  const contact = [org.email, org.phone].filter(Boolean).map(esc).join(" · ");
-  return `${esc(org.name)}${org.address ? ` · ${esc(org.address)}` : ""}${
-    contact ? `<br/>${contact}` : ""
-  }<br/>You can reply to this email to reach us.`;
+  return orgFooter(
+    { name: org.name, address: org.address, email: org.email, phone: org.phone },
+    "You can reply to this email to reach us.",
+  );
 }
 
 function money(amount: number | null | undefined, currency: string | null | undefined): string {
@@ -107,28 +108,13 @@ export function buildInvoiceEmailHtml({
   org: OrgDetails;
 }): string {
   const cur = invoice.currency;
-  const items = ((invoice.line_items as any[]) || [])
-    .map(
-      (li) => `
-        <tr>
-          <td style="padding:8px 10px;border-bottom:1px solid #e5e7eb">${esc(li.description)}</td>
-          <td style="padding:8px 10px;border-bottom:1px solid #e5e7eb;text-align:center">${esc(li.quantity)}</td>
-          <td style="padding:8px 10px;border-bottom:1px solid #e5e7eb;text-align:right">${esc(money(li.unit_price, cur))}</td>
-          <td style="padding:8px 10px;border-bottom:1px solid #e5e7eb;text-align:right">${esc(money(li.amount, cur))}</td>
-        </tr>`,
-    )
-    .join("");
-  const totalRow = (label: string, value: string, bold = false) => `
-        <tr>
-          <td colspan="3" style="padding:6px 10px;text-align:right;${bold ? "font-weight:bold;font-size:15px" : "color:#6b7280"}">${esc(label)}</td>
-          <td style="padding:6px 10px;text-align:right;${bold ? "font-weight:bold;font-size:15px" : ""}">${esc(value)}</td>
-        </tr>`;
   const discount = Number(invoice.discount_amount || 0);
   const tax = Number(invoice.tax_amount || 0);
 
   return renderEmail({
     lab: org.name,
     logoUrl: org.logoUrl,
+    eyebrow: "Invoice",
     heading: `Invoice ${invoice.invoice_number}`,
     intro: `Dear ${client?.contact_person || client?.name || "Customer"}, please find below your invoice from ${org.name}.`,
     sections: [
@@ -143,29 +129,35 @@ export function buildInvoiceEmailHtml({
         ],
       },
     ],
-    html: `
-      <h3 style="margin:24px 0 8px;font-size:14px;text-transform:uppercase;letter-spacing:1px;color:#1e40af">Items</h3>
-      <table style="width:100%;border-collapse:collapse;background:#fff;border:1px solid #e5e7eb;font-size:14px">
-        <tr style="background:#1f2937;color:#fff">
-          <th style="padding:8px 10px;text-align:left">Description</th>
-          <th style="padding:8px 10px">Qty</th>
-          <th style="padding:8px 10px;text-align:right">Unit Price</th>
-          <th style="padding:8px 10px;text-align:right">Amount</th>
-        </tr>
-        ${items}
-        ${totalRow("Subtotal", money(invoice.subtotal, cur))}
-        ${discount > 0 ? totalRow("Discount", `- ${money(discount, cur)}`) : ""}
-        ${tax > 0 ? totalRow(`VAT (${invoice.tax_rate}%)`, money(tax, cur)) : ""}
-        ${totalRow("Total Due", money(invoice.total, cur), true)}
-      </table>
-      ${invoice.notes ? `<p style="margin-top:16px"><strong>Notes:</strong> ${esc(invoice.notes)}</p>` : ""}
-      ${
-        invoice.status === "paid"
-          ? `<p style="margin-top:16px;padding:12px;background:#d1fae5;border-radius:6px"><strong>This invoice has been paid.</strong> Thank you.</p>`
-          : `<h3 style="margin:24px 0 8px;font-size:14px;text-transform:uppercase;letter-spacing:1px;color:#1e40af">Payment Details</h3>
-             ${bankDetailsHtml(org, invoice.invoice_number)}
-             <p>After payment, please reply to this email with your proof of payment.</p>`
-      }`,
+    html: [
+      sectionTitle("Items"),
+      itemsTable({
+        columns: [
+          { label: "Description" },
+          { label: "Qty", align: "center", width: "48px" },
+          { label: "Unit Price", align: "right" },
+          { label: "Amount", align: "right" },
+        ],
+        rows: ((invoice.line_items as any[]) || []).map((li) => [
+          String(li.description ?? ""),
+          String(li.quantity ?? ""),
+          money(li.unit_price, cur),
+          money(li.amount, cur),
+        ]),
+        totals: [
+          { label: "Subtotal", value: money(invoice.subtotal, cur) },
+          ...(discount > 0 ? [{ label: "Discount", value: `- ${money(discount, cur)}` }] : []),
+          ...(tax > 0 ? [{ label: `VAT (${invoice.tax_rate}%)`, value: money(tax, cur) }] : []),
+          { label: "Total Due", value: money(invoice.total, cur), strong: true },
+        ],
+      }),
+      invoice.notes ? paragraph(`<strong>Notes:</strong> ${esc(invoice.notes)}`, { html: true }) : "",
+      invoice.status === "paid"
+        ? notice("<strong>This invoice has been paid.</strong> Thank you.")
+        : sectionTitle("Payment Details") +
+          bankDetailsHtml(org, invoice.invoice_number) +
+          paragraph("After payment, please reply to this email with your proof of payment."),
+    ].join(""),
     footer: clientFooter(org),
   });
 }
@@ -213,6 +205,7 @@ export async function sendResultToClient(params: {
   const html = renderEmail({
     lab: org.name,
     logoUrl: org.logoUrl,
+    eyebrow: "Certificate of Analysis",
     heading: "Your Certificate of Analysis",
     intro: `Dear ${client?.contact_person || client?.name || "Customer"}, the analysis of your sample is complete. Your Certificate of Analysis is attached to this email.`,
     sections: [
@@ -228,7 +221,7 @@ export async function sendResultToClient(params: {
       },
     ],
     html: params.message?.trim()
-      ? `<p style="margin-top:20px;white-space:pre-line">${esc(params.message.trim())}</p>`
+      ? notice(esc(params.message.trim()).replace(/\n/g, "<br/>"))
       : "",
     link: verifyUrl ? { href: verifyUrl, label: "Verify Certificate Online" } : undefined,
     footer: clientFooter(org),

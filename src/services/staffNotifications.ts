@@ -14,7 +14,8 @@ import { and, eq, inArray } from "drizzle-orm";
 import { db } from "../db";
 import { clients, results, samples, tenants, users } from "../db/schema";
 import { logger } from "../utils/logger";
-import { FROM_EMAIL, FROM_NAME, emailLogoHtml, getTransporter } from "./emailService";
+import { FROM_EMAIL, FROM_NAME, getTransporter } from "./emailService";
+import { button, detailSection, emailShell, orgFooter, paragraph } from "./emailLayout";
 import { sendNotification } from "./notificationService";
 
 export const MANAGEMENT_ROLES = ["operations_manager", "general_manager", "md"];
@@ -100,61 +101,35 @@ async function labBrand(tenantId: string): Promise<{ lab: string; logoUrl: strin
 
 export function renderEmail(opts: {
   lab: string;
-  /** Public URL of the organisation logo, shown above the header */
+  /** Public URL of the organisation logo, shown in the header */
   logoUrl?: string | null;
+  /** Small header label, e.g. "Sample Notification" */
+  eyebrow?: string;
   heading: string;
   intro: string;
   sections: { title: string; rows: Row[] }[];
   link?: { href: string; label: string };
   /** Trusted HTML placed after the sections (callers escape their own values) */
   html?: string;
-  /** Replaces the default staff-notification footer */
+  /** Replaces the default staff-notification footer (trusted HTML) */
   footer?: string;
 }): string {
-  const sections = opts.sections
-    .map((section) => {
-      const rows = section.rows
-        .filter(([, v]) => v !== null && v !== undefined && String(v).trim() !== "")
-        .map(
-          ([label, value]) => `
-            <tr>
-              <td style="padding:8px 12px;border-bottom:1px solid #e5e7eb;color:#6b7280;font-weight:bold;width:190px;vertical-align:top">${esc(label)}</td>
-              <td style="padding:8px 12px;border-bottom:1px solid #e5e7eb;color:#111827">${esc(value)}</td>
-            </tr>`,
-        )
-        .join("");
-      if (!rows) return "";
-      return `
-        <h3 style="margin:24px 0 8px;font-size:14px;text-transform:uppercase;letter-spacing:1px;color:#1e40af">${esc(section.title)}</h3>
-        <table style="width:100%;border-collapse:collapse;background:#fff;border:1px solid #e5e7eb;font-size:14px">${rows}</table>`;
-    })
-    .join("");
-
-  const button = opts.link
-    ? `<div style="text-align:center;margin:28px 0 8px">
-         <a href="${esc(opts.link.href)}" style="display:inline-block;background:#1e40af;color:#fff;padding:12px 28px;text-decoration:none;border-radius:6px;font-weight:bold">${esc(opts.link.label)}</a>
-       </div>`
-    : "";
-
-  return `<!DOCTYPE html>
-<html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"></head><body style="margin:0;font-family:Arial,sans-serif;line-height:1.5;color:#333;background:#f3f4f6">
-  <div style="max-width:600px;margin:0 auto;padding:20px">
-    ${emailLogoHtml(opts.logoUrl, opts.lab)}
-    <div style="background:#1f2937;color:#fff;padding:20px 24px;border-radius:${opts.logoUrl ? "0" : "8px 8px 0 0"}">
-      <div style="font-size:12px;opacity:.75;text-transform:uppercase;letter-spacing:1px">${esc(opts.lab)}</div>
-      <h2 style="margin:4px 0 0;font-size:20px">${esc(opts.heading)}</h2>
-    </div>
-    <div style="background:#f9fafb;padding:24px;border-radius:0 0 8px 8px">
-      <p style="margin:0">${esc(opts.intro)}</p>
-      ${sections}
-      ${opts.html ?? ""}
-      ${button}
-      <p style="margin-top:28px;padding-top:16px;border-top:1px solid #e5e7eb;color:#9ca3af;font-size:12px">
-        ${opts.footer ?? `Automated notification from ${esc(opts.lab)} LMS. Please do not reply to this email.`}
-      </p>
-    </div>
-  </div>
-</body></html>`;
+  return emailShell({
+    orgName: opts.lab,
+    logoUrl: opts.logoUrl,
+    eyebrow: opts.eyebrow ?? "Notification",
+    title: opts.heading,
+    preheader: opts.intro,
+    content: [
+      paragraph(opts.intro),
+      ...opts.sections.map((sec) => detailSection(sec.title, sec.rows)),
+      opts.html ?? "",
+      opts.link ? button(opts.link.href, opts.link.label) : "",
+    ].join(""),
+    footer:
+      opts.footer ??
+      orgFooter({ name: opts.lab }, "Automated notification from the LMS. Please do not reply to this email."),
+  });
 }
 
 /** Send one message per recipient so a single bad address can't block the rest. */
@@ -263,6 +238,7 @@ export async function notifyClientRegistered(params: {
   const html = renderEmail({
     lab,
     logoUrl,
+    eyebrow: "Client Notification",
     heading: "New Client Registered",
     intro: `A new client has been registered${params.registeredBy ? ` by ${params.registeredBy}` : ""}.`,
     sections: [
@@ -305,6 +281,7 @@ export async function notifySampleRegistered(params: {
   const managementHtml = renderEmail({
     lab,
     logoUrl,
+    eyebrow: "Sample Notification",
     heading: "New Sample Registered",
     intro: `A new sample has been registered${by}.`,
     sections: [
@@ -318,6 +295,7 @@ export async function notifySampleRegistered(params: {
   const labHtml = renderEmail({
     lab,
     logoUrl,
+    eyebrow: "Laboratory",
     heading: "New Sample for Analysis",
     intro: `A new sample has been registered for laboratory analysis${by}.`,
     sections: [{ title: "Sample Information", rows: sampleRows(sample, analystName) }],
@@ -358,6 +336,7 @@ export async function notifySampleAssigned(params: {
   const html = renderEmail({
     lab,
     logoUrl,
+    eyebrow: "Laboratory",
     heading: "Sample Assigned for Analysis",
     intro: `Sample ${sample.ulid} has been assigned to ${analystName || "an analyst"}${
       params.assignedBy ? ` by ${params.assignedBy}` : ""
@@ -401,6 +380,7 @@ export async function notifyResultReadyForPrinting(params: {
   const html = renderEmail({
     lab,
     logoUrl,
+    eyebrow: "Ready for Printing",
     heading: "Result Approved – Ready for Printing",
     intro:
       "The final analysis and result approval have been completed. The Certificate of Analysis is ready for printing.",
